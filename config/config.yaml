@@ -1,0 +1,35 @@
+# IEEE 2030.5 伺服器設定
+ieee2030_5:
+  server_url: "https://localhost:7443"
+  dcap_path: "/dcap"
+  cert_file: "certs/client.crt"
+  key_file: "certs/client.pem"
+  ca_file: "certs/ca.crt"
+  poll_rate: 30  # 秒
+  device_id: "bms-client-001"
+  pin: 12345
+
+# Modbus BMS 設定
+modbus:
+  host: "192.168.1.100"
+  port: 502
+  unit_id: 1
+  timeout: 5.0
+  rack_count: 4
+  refresh_interval: 0.5  # 秒
+
+# 系統暫存器設定
+registers:
+  system:
+    base_address: 4000
+    count: 100
+  rack:
+    base_address: 7000
+    offset: 30
+    max_racks: 24
+
+# 日誌設定
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/bms_client.log"
