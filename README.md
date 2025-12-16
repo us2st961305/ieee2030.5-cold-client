@@ -141,6 +141,3 @@ ruff check src/ tests/
 mypy src/
 ```
 
-## 授權
-
-MIT License
