@@ -27,6 +27,8 @@ from bms_2030_5_client.models import (
     StateOfCharge,
     ConnectStatusType,
     OperationalModeStatusType,
+    ConnectStatusValue,
+    OperationalModeStatusValue,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,7 +82,12 @@ class BMSAdapter:
 
     def _to_soc(self, percent: float) -> StateOfCharge:
         """Convert percentage to StateOfCharge (0-10000)."""
-        return StateOfCharge(value=int(percent * 100))
+    def _to_soc(self, percent: float) -> StateOfCharge:
+        """Convert percentage to StateOfCharge."""
+        return StateOfCharge(
+            dateTime=int(datetime.now().timestamp()),
+            value=int(percent * 100)
+        )
 
     def snapshot_to_der_status(
         self,
@@ -114,22 +121,18 @@ class BMSAdapter:
         if snapshot.has_alarms or any(r.status == RackStatus.FAULT for r in snapshot.racks):
             connect_status |= ConnectStatusType.FAULT
 
-        # Determine operational mode
-        total_current = sum(r.current for r in snapshot.active_racks)
-        if total_current > 0:
-            op_mode = OperationalModeStatusType.CHARGING
-        elif total_current < 0:
-            op_mode = OperationalModeStatusType.DISCHARGING
-        else:
-            op_mode = OperationalModeStatusType.OPERATING
+        # Determine operational mode - use OPERATING for any active state
+        op_mode = OperationalModeStatusType.OPERATING
+        
+        ts = int(datetime.now().timestamp())
 
         return DERStatus(
             href=href,
-            readingTime=int(datetime.now().timestamp()),
-            genConnectStatus=int(connect_status),
-            operationalModeStatus=int(op_mode),
+            readingTime=ts,
+            genConnectStatus=ConnectStatusValue(dateTime=ts, value=f"{int(connect_status):02X}"),
+            operationalModeStatus=OperationalModeStatusValue(dateTime=ts, value=f"{int(op_mode):02X}"),
             stateOfChargeStatus=self._to_soc(snapshot.average_soc),
-            storConnectStatus=int(connect_status),
+            storConnectStatus=ConnectStatusValue(dateTime=ts, value=f"{int(connect_status):02X}"),
         )
 
     def snapshot_to_der_availability(
@@ -263,21 +266,21 @@ class BMSAdapter:
         if rack.status == RackStatus.FAULT or rack.alarm_status != 0:
             connect_status |= ConnectStatusType.FAULT
 
-        # Operational mode
-        if rack.is_charging:
-            op_mode = OperationalModeStatusType.CHARGING
-        elif rack.is_discharging:
-            op_mode = OperationalModeStatusType.DISCHARGING
-        elif rack.status == RackStatus.STANDBY:
+        # Operational mode - use OPERATING for active state
+        if rack.status == RackStatus.STANDBY:
+            op_mode = OperationalModeStatusType.OPERATING
+        elif rack.status in (RackStatus.CHARGING, RackStatus.DISCHARGING):
             op_mode = OperationalModeStatusType.OPERATING
         else:
             op_mode = OperationalModeStatusType.OFF
 
+        ts = int(rack.timestamp.timestamp())
+
         return DERStatus(
             href=href,
-            readingTime=int(rack.timestamp.timestamp()),
-            genConnectStatus=int(connect_status),
-            operationalModeStatus=int(op_mode),
+            readingTime=ts,
+            genConnectStatus=ConnectStatusValue(dateTime=ts, value=f"{int(connect_status):02X}"),
+            operationalModeStatus=OperationalModeStatusValue(dateTime=ts, value=f"{int(op_mode):02X}"),
             stateOfChargeStatus=self._to_soc(rack.soc),
-            storConnectStatus=int(connect_status),
+            storConnectStatus=ConnectStatusValue(dateTime=ts, value=f"{int(connect_status):02X}"),
         )

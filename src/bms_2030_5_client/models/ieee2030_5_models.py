@@ -48,6 +48,14 @@ class OperationalModeStatusType(IntFlag):
 
 @dataclass_json
 @dataclass
+class Link:
+    """IEEE 2030.5 Link element with href and all attributes."""
+    href: Optional[str] = None
+    all: Optional[int] = None  # Total count of items
+
+
+@dataclass_json
+@dataclass
 class ActivePower:
     """Real power in Watts."""
     multiplier: int = 0  # 10^multiplier
@@ -80,8 +88,41 @@ class Current:
 
 @dataclass_json
 @dataclass
+class ConnectStatusValue:
+    """Connection status with timestamp. Value is hex binary string."""
+    dateTime: int = 0
+    value: str = "00"
+
+
+@dataclass_json
+@dataclass
+class OperationalModeStatusValue:
+    """Operational mode status with timestamp. Value is hex binary string."""
+    dateTime: int = 0
+    value: str = "00"
+
+
+@dataclass_json
+@dataclass
+class InverterStatusValue:
+    """Inverter status with timestamp. Value is hex binary string."""
+    dateTime: int = 0
+    value: str = "00"
+
+
+@dataclass_json
+@dataclass
+class StorageModeStatusValue:
+    """Storage mode status with timestamp. Value is hex binary string."""
+    dateTime: int = 0
+    value: str = "00"
+
+
+@dataclass_json
+@dataclass
 class StateOfCharge:
-    """State of charge percentage."""
+    """State of charge percentage with timestamp."""
+    dateTime: int = 0  # Unix timestamp
     value: int = 0  # 0-10000 (0.00% - 100.00%)
 
 
@@ -148,12 +189,12 @@ class DERStatus:
     """
     href: Optional[str] = None
     readingTime: int = 0  # Timestamp of the reading
-    genConnectStatus: Optional[int] = None  # ConnectStatusType
-    inverterStatus: Optional[int] = None
-    operationalModeStatus: Optional[int] = None  # OperationalModeStatusType
+    genConnectStatus: Optional[ConnectStatusValue] = None
+    inverterStatus: Optional[InverterStatusValue] = None
+    operationalModeStatus: Optional[OperationalModeStatusValue] = None
     stateOfChargeStatus: Optional[StateOfCharge] = None
-    storModeStatus: Optional[int] = None
-    storConnectStatus: Optional[int] = None
+    storModeStatus: Optional[StorageModeStatusValue] = None
+    storConnectStatus: Optional[ConnectStatusValue] = None
 
 
 @dataclass_json
@@ -249,11 +290,19 @@ class DeviceCapability:
     """
     href: Optional[str] = None
     pollRate: int = 900  # Default poll rate in seconds
-    EndDeviceListLink: Optional[str] = None
-    MirrorUsagePointListLink: Optional[str] = None
-    SelfDeviceLink: Optional[str] = None
-    TimeLink: Optional[str] = None
-    DERProgramListLink: Optional[str] = None
+    EndDeviceListLink: Optional['Link'] = None
+    MirrorUsagePointListLink: Optional['Link'] = None
+    SelfDeviceLink: Optional['Link'] = None
+    TimeLink: Optional['Link'] = None
+    DERProgramListLink: Optional['Link'] = None
+    CustomerAccountListLink: Optional['Link'] = None
+    DemandResponseProgramListLink: Optional['Link'] = None
+    FileListLink: Optional['Link'] = None
+    MessagingProgramListLink: Optional['Link'] = None
+    PrepaymentListLink: Optional['Link'] = None
+    ResponseSetListLink: Optional['Link'] = None
+    TariffProfileListLink: Optional['Link'] = None
+    UsagePointListLink: Optional['Link'] = None
 
 
 @dataclass_json

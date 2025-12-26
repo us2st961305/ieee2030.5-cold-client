@@ -176,6 +176,7 @@ class IEEE2030_5Client:
             self._client = httpx.AsyncClient(
                 base_url=self.server_url,
                 verify=ssl_context,
+                cert=(str(self.cert_file), str(self.key_file)),  # Client certificate for mutual TLS
                 timeout=30.0,
                 headers={
                     "Accept": "application/sep+xml",

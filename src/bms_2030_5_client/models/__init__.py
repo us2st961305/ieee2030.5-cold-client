@@ -10,6 +10,7 @@ from bms_2030_5_client.models.bms_models import (
     AlarmLevel,
 )
 from bms_2030_5_client.models.ieee2030_5_models import (
+    Link,
     DER,
     DERCapability,
     DERSettings,
@@ -23,6 +24,10 @@ from bms_2030_5_client.models.ieee2030_5_models import (
     Voltage,
     Current,
     StateOfCharge,
+    ConnectStatusValue,
+    OperationalModeStatusValue,
+    InverterStatusValue,
+    StorageModeStatusValue,
     Temperature,
     EndDevice,
     DeviceCapability,
@@ -39,6 +44,7 @@ __all__ = [
     "BMSSnapshot",
     "AlarmLevel",
     # IEEE 2030.5 models
+    "Link",
     "DER",
     "DERCapability",
     "DERSettings",
@@ -52,6 +58,10 @@ __all__ = [
     "Voltage",
     "Current",
     "StateOfCharge",
+    "ConnectStatusValue",
+    "OperationalModeStatusValue",
+    "InverterStatusValue",
+    "StorageModeStatusValue",
     "Temperature",
     "EndDevice",
     "DeviceCapability",
