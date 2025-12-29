@@ -319,3 +319,237 @@ class Time:
     localTime: Optional[int] = None
     quality: int = 0
     tzOffset: int = 0
+
+
+# =============================================================================
+# Metering Function Set Models (IEEE 2030.5 MirrorUsagePoint)
+# =============================================================================
+
+
+class AccumulationBehaviourType(IntEnum):
+    """How reading values are accumulated over time."""
+    NOT_APPLICABLE = 0
+    CUMULATIVE = 3        # Running total
+    DELTA_DATA = 4        # Change since last reading
+    INDICATING = 6        # Instantaneous value
+    SUMMATION = 9         # Sum over interval
+    INSTANTANEOUS = 12    # Current value at moment
+
+
+class CommodityType(IntEnum):
+    """Type of commodity being measured."""
+    NOT_APPLICABLE = 0
+    ELECTRICITY_PRIMARY = 1
+    ELECTRICITY_SECONDARY = 2
+    AIR = 4
+    NATURAL_GAS = 7
+    WATER = 11
+    ELECTRICITY_STORAGE = 15  # Battery storage
+
+
+class FlowDirectionType(IntEnum):
+    """Direction of energy flow."""
+    NOT_APPLICABLE = 0
+    FORWARD = 1           # From source to load
+    REVERSE = 19          # From load to source (generation)
+    NET = 4               # Net flow (forward - reverse)
+    Q1_PLUS_Q2 = 5        # Quadrants 1+2
+    Q1_PLUS_Q3 = 7        # Quadrants 1+3
+    Q1_PLUS_Q4 = 8        # Quadrants 1+4
+
+
+class DataQualifierType(IntEnum):
+    """Data qualifier describing measurement type."""
+    NOT_APPLICABLE = 0
+    AVERAGE = 2
+    MAXIMUM = 8
+    MINIMUM = 9
+    NORMAL = 12
+
+
+class KindType(IntEnum):
+    """Kind of reading."""
+    NOT_APPLICABLE = 0
+    CURRENCY = 3
+    CURRENT = 4
+    CURRENT_ANGLE = 5
+    DATE = 7
+    DEMAND = 8
+    ENERGY = 12
+    FREQUENCY = 15
+    POWER = 37
+    POWER_FACTOR = 38
+    TEMPERATURE = 40
+    VOLTAGE = 29
+    VOLTAGE_ANGLE = 30
+
+
+class UomType(IntEnum):
+    """Unit of measure."""
+    NOT_APPLICABLE = 0
+    AMPERE = 5          # A
+    KELVIN = 6          # K
+    CELSIUS = 23        # °C
+    VOLT = 29           # V
+    WATT = 38           # W
+    WATT_HOUR = 72      # Wh
+    VAR = 63            # VAR
+    PERCENT = 33        # %
+    AMP_HOUR = 106      # Ah
+
+
+class ServiceKind(IntEnum):
+    """Type of service."""
+    ELECTRICITY = 0
+    GAS = 1
+    WATER = 2
+    TIME = 3
+    HEAT = 4
+    COOLING = 5
+    PRESSURE = 6
+    AIR = 9
+
+
+class RoleFlagsType(IntEnum):
+    """Role flags for usage point."""
+    IS_MIRROR = 0x0001
+    IS_PREMISE_AGGREGATION_POINT = 0x0002
+    IS_PEV = 0x0004
+    IS_DER = 0x0008
+    IS_REVENUE_QUALITY = 0x0010
+    IS_DC = 0x0020
+    IS_SUBMETER = 0x0040
+
+
+@dataclass_json
+@dataclass
+class DateTimeInterval:
+    """Time period with duration and start time."""
+    duration: int = 0     # Duration in seconds
+    start: int = 0        # Start timestamp (Unix time)
+
+
+@dataclass_json
+@dataclass
+class UnitValueType:
+    """Unit value with multiplier."""
+    multiplier: int = 0   # Power of ten multiplier
+    unit: int = 0         # UomType
+    value: int = 0        # Value
+
+
+@dataclass_json
+@dataclass
+class ReadingType:
+    """
+    Type of data conveyed by a Reading.
+    
+    Based on IEEE 2030.5 ReadingType for describing measurement characteristics.
+    """
+    href: Optional[str] = None
+    accumulationBehaviour: int = AccumulationBehaviourType.NOT_APPLICABLE
+    commodity: int = CommodityType.ELECTRICITY_SECONDARY
+    dataQualifier: int = DataQualifierType.NOT_APPLICABLE
+    flowDirection: int = FlowDirectionType.NOT_APPLICABLE
+    intervalLength: int = 0  # Default interval in seconds
+    kind: int = KindType.NOT_APPLICABLE
+    phase: Optional[int] = None  # PhaseCode
+    powerOfTenMultiplier: int = 0  # 10^multiplier for value
+    uom: int = UomType.NOT_APPLICABLE
+    maxNumberOfIntervals: int = 0
+    numberOfConsumptionBlocks: int = 0
+    numberOfTouTiers: int = 0
+
+
+@dataclass_json
+@dataclass
+class MeterReading:
+    """
+    A single meter reading value.
+    
+    IEEE 2030.5 Reading element for MirrorMeterReading.
+    """
+    href: Optional[str] = None
+    localID: Optional[str] = None  # HexBinary16
+    consumptionBlock: Optional[int] = None
+    qualityFlags: Optional[str] = None  # HexBinary16
+    timePeriod: Optional[DateTimeInterval] = None
+    touTier: Optional[int] = None
+    value: int = 0  # Int48 - actual reading value
+
+
+@dataclass_json
+@dataclass
+class MirrorReadingSet:
+    """
+    A set of readings for a time period.
+    
+    IEEE 2030.5 MirrorReadingSet contains multiple readings.
+    """
+    href: Optional[str] = None
+    mRID: Optional[str] = None
+    description: Optional[str] = None
+    version: Optional[int] = None
+    timePeriod: Optional[DateTimeInterval] = None
+    Reading: List[MeterReading] = field(default_factory=list)
+
+
+@dataclass_json
+@dataclass
+class MirrorMeterReading:
+    """
+    Meter reading with type and value(s).
+    
+    IEEE 2030.5 MirrorMeterReading for uploading readings to server.
+    """
+    href: Optional[str] = None
+    mRID: Optional[str] = None
+    description: Optional[str] = None
+    version: Optional[int] = None
+    lastUpdateTime: Optional[int] = None
+    nextUpdateTime: Optional[int] = None
+    MirrorReadingSet: List[MirrorReadingSet] = field(default_factory=list)
+    Reading: Optional[MeterReading] = None  # Current/latest reading
+    ReadingType: Optional[ReadingType] = None
+
+
+@dataclass_json
+@dataclass
+class MirrorUsagePoint:
+    """
+    Mirror Usage Point for uploading meter data.
+    
+    IEEE 2030.5 MirrorUsagePoint is the primary resource for devices
+    to upload metering data to the server. It mirrors a UsagePoint
+    and contains MirrorMeterReading resources.
+    
+    Used for uploading BMS data:
+    - Total SOC (%)
+    - Total Current (A)
+    - Charge/Discharge Power (W)
+    - Charge Energy (Wh)
+    - Discharge Energy (Wh)
+    """
+    href: Optional[str] = None
+    mRID: Optional[str] = None
+    description: Optional[str] = None
+    version: Optional[int] = None
+    roleFlags: int = RoleFlagsType.IS_MIRROR | RoleFlagsType.IS_DER
+    serviceCategoryKind: int = ServiceKind.ELECTRICITY
+    status: int = 1  # 0=off, 1=on
+    deviceLFDI: Optional[str] = None  # HexBinary160
+    MirrorMeterReading: List[MirrorMeterReading] = field(default_factory=list)
+    postRate: int = 900  # Posting rate in seconds
+
+
+@dataclass_json
+@dataclass
+class MirrorUsagePointList:
+    """
+    List of MirrorUsagePoint resources.
+    """
+    href: Optional[str] = None
+    all: int = 0
+    results: int = 0
+    pollRate: int = 900
+    MirrorUsagePoint: List[MirrorUsagePoint] = field(default_factory=list)

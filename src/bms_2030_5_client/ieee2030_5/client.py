@@ -26,6 +26,9 @@ from bms_2030_5_client.models import (
     DERStatus,
     DERAvailability,
     Time,
+    MirrorUsagePoint,
+    MirrorUsagePointList,
+    MirrorMeterReading,
 )
 from bms_2030_5_client.ieee2030_5.xml_utils import (
     dataclass_to_xml,
@@ -318,6 +321,10 @@ class IEEE2030_5Client:
         """
         Register end device with server.
         
+        First checks if device is already registered by fetching the EndDeviceList
+        and comparing sFDI. If already registered, returns the existing device.
+        Otherwise, proceeds with registration.
+        
         Args:
             pin: Device PIN for registration
             
@@ -327,12 +334,28 @@ class IEEE2030_5Client:
         if not self._device_capability:
             await self.get_device_capability()
 
+        edev_list_link = self._device_capability.EndDeviceListLink
+        
+        # Check if device is already registered by fetching EndDeviceList
+        try:
+            edev_list = await self._get(edev_list_link)
+            # Search for existing device with matching sFDI
+            if hasattr(edev_list, 'EndDevice') and edev_list.EndDevice:
+                for existing_device in edev_list.EndDevice:
+                    if existing_device.sFDI == self.sfdi:
+                        logger.info(f"Device already registered with sFDI: {self.sfdi}")
+                        self._end_device = existing_device
+                        return self._end_device
+        except IEEE2030_5ClientError as e:
+            logger.debug(f"Could not fetch EndDeviceList: {e}, proceeding with registration")
+
+        # Device not found, proceed with registration
+        logger.info(f"Registering new device with sFDI: {self.sfdi}")
         end_device = EndDevice(
             sFDI=self.sfdi,
             changedTime=int(datetime.now().timestamp()),
         )
         
-        edev_list_link = self._device_capability.EndDeviceListLink
         _, location = await self._post(edev_list_link, end_device)
         
         if location:
@@ -426,3 +449,118 @@ class IEEE2030_5Client:
         if self._device_capability.DERProgramListLink:
             return await self._get(self._device_capability.DERProgramListLink)
         return []
+
+    # =========================================================================
+    # Metering / MirrorUsagePoint Resources
+    # =========================================================================
+
+    async def get_mirror_usage_point_list(self) -> MirrorUsagePointList:
+        """
+        Get list of MirrorUsagePoint resources.
+        
+        Returns:
+            MirrorUsagePointList containing all mirror usage points
+        """
+        if not self._device_capability:
+            await self.get_device_capability()
+            
+        if self._device_capability.MirrorUsagePointListLink:
+            return await self._get(
+                self._device_capability.MirrorUsagePointListLink.href,
+                MirrorUsagePointList,
+            )
+        raise IEEE2030_5ClientError("MirrorUsagePointListLink not available")
+
+    async def create_mirror_usage_point(
+        self,
+        mup: MirrorUsagePoint,
+    ) -> tuple[MirrorUsagePoint, str]:
+        """
+        Create a new MirrorUsagePoint (meter) on the server.
+        
+        This registers a new meter with the server. The server will
+        return a location header with the href for the created resource.
+        
+        Args:
+            mup: MirrorUsagePoint to create
+            
+        Returns:
+            Tuple of (created MirrorUsagePoint, location href)
+        """
+        if not self._device_capability:
+            await self.get_device_capability()
+            
+        if not self._device_capability.MirrorUsagePointListLink:
+            raise IEEE2030_5ClientError("MirrorUsagePointListLink not available")
+            
+        # Set device LFDI if not already set
+        if not mup.deviceLFDI:
+            mup.deviceLFDI = self.lfdi
+            
+        result, location = await self._post(
+            self._device_capability.MirrorUsagePointListLink.href,
+            mup,
+            MirrorUsagePoint,
+        )
+        
+        logger.info(f"Created MirrorUsagePoint at {location}")
+        return result, location
+
+    async def get_mirror_usage_point(self, mup_href: str) -> MirrorUsagePoint:
+        """
+        Get a specific MirrorUsagePoint by href.
+        
+        Args:
+            mup_href: The href of the MirrorUsagePoint
+            
+        Returns:
+            MirrorUsagePoint resource
+        """
+        return await self._get(mup_href, MirrorUsagePoint)
+
+    async def update_mirror_meter_reading(
+        self,
+        mup_href: str,
+        reading: MirrorMeterReading,
+    ) -> bool:
+        """
+        Update/post a meter reading to a MirrorUsagePoint.
+        
+        This uploads new reading data to the server.
+        
+        Args:
+            mup_href: The href of the MirrorUsagePoint
+            reading: MirrorMeterReading with the new data
+            
+        Returns:
+            True if successful
+        """
+        # POST to the MirrorUsagePoint to add reading
+        try:
+            _, location = await self._post(mup_href, reading, None)
+            logger.info(f"Posted meter reading to {mup_href}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to post meter reading: {e}")
+            return False
+
+    async def post_meter_readings(
+        self,
+        mup_href: str,
+        readings: list[MirrorMeterReading],
+    ) -> bool:
+        """
+        Post multiple meter readings to a MirrorUsagePoint.
+        
+        Args:
+            mup_href: The href of the MirrorUsagePoint
+            readings: List of MirrorMeterReading objects
+            
+        Returns:
+            True if all readings posted successfully
+        """
+        success = True
+        for reading in readings:
+            if not await self.update_mirror_meter_reading(mup_href, reading):
+                success = False
+        return success

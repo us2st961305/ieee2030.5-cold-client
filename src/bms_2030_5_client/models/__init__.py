@@ -34,6 +34,22 @@ from bms_2030_5_client.models.ieee2030_5_models import (
     Time,
     Reading,
     MirrorMeterReading,
+    # Metering models
+    AccumulationBehaviourType,
+    CommodityType,
+    FlowDirectionType,
+    DataQualifierType,
+    KindType,
+    UomType,
+    ServiceKind,
+    RoleFlagsType,
+    DateTimeInterval,
+    UnitValueType,
+    ReadingType,
+    MeterReading,
+    MirrorReadingSet,
+    MirrorUsagePoint,
+    MirrorUsagePointList,
 )
 
 __all__ = [
@@ -68,4 +84,20 @@ __all__ = [
     "Time",
     "Reading",
     "MirrorMeterReading",
+    # Metering models
+    "AccumulationBehaviourType",
+    "CommodityType",
+    "FlowDirectionType",
+    "DataQualifierType",
+    "KindType",
+    "UomType",
+    "ServiceKind",
+    "RoleFlagsType",
+    "DateTimeInterval",
+    "UnitValueType",
+    "ReadingType",
+    "MeterReading",
+    "MirrorReadingSet",
+    "MirrorUsagePoint",
+    "MirrorUsagePointList",
 ]

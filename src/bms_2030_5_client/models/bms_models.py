@@ -166,60 +166,89 @@ class SystemData:
     """
     System-level BMS data from registers 4000-4099.
     
-    Register mapping:
-    - 4000: system_status (U16)
-    - 4001: total_voltage (U32, 0.1V) [4001-4002]
-    - 4003: total_current (S32, 0.1A) [4003-4004]
-    - 4005: total_soc (U16, 0.1%)
-    - 4006: total_power (S32, 0.1kW) [4006-4007]
-    - 4008: pcs_status (U16)
-    - 4009: bms_mode (U16)
-    - 4010: active_rack_count (U16)
-    - 4011-4034: rack_enable_status (24 bits)
+    Register mapping (CUBE 電池組暫存器通訊表 V1.0.3):
+    - 4000: Vol_avg (U16, 0.1V) - Average voltage
+    - 4001: total_curr (S16, 0.1A) - Total current
+    - 4002: total_power (S16, 0.1kW) - Total power
+    - 4003: deliy_CHG (U16, 0.1kWh) - Daily charge energy
+    - 4004: deliy_DSC (U16, 0.1kWh) - Daily discharge energy
+    - 4005: SOC_avg (U16, 0.1%) - Average SOC
+    - 4006: RM_total (U16, AH) - Total remaining capacity
+    - 4007: FCC_total (U16, AH) - Total full charge capacity
+    - 4008: online_NO (U16) - Online rack count
+    - 4009: allow_power (U16, 0.1kW) - Allowed power
+    - 4010: Right_State (U16, bitfield) - Rack 1-12 state
+    - 4011: Left_State (U16, bitfield) - Rack 13-24 state
+    - 4012: SYS_state (U16, 0/1) - System state
+    - 4016: all_max_t (S16, 1°C) - Maximum temperature
+    - 4017: all_min_t (S16, 1°C) - Minimum temperature
+    - 4042: allow_power_DSC (U16, 0.1kW) - Allowed discharge power
+    - 4043: allow_power_CHG (U16, 0.1kW) - Allowed charge power
     """
     system_status: int = 0
-    total_voltage: float = 0.0  # V
-    total_current: float = 0.0  # A
-    total_soc: float = 0.0  # %
-    total_power: float = 0.0  # kW
+    total_voltage: float = 0.0  # V (from 4000: Vol_avg)
+    total_current: float = 0.0  # A (from 4001: total_curr)
+    total_soc: float = 0.0  # % (from 4005: SOC_avg)
+    total_power: float = 0.0  # kW (from 4002: total_power)
+    charge_energy: float = 0.0  # kWh (from 4003: deliy_CHG)
+    discharge_energy: float = 0.0  # kWh (from 4004: deliy_DSC)
+    remaining_capacity: float = 0.0  # AH (from 4006: RM_total)
+    full_charge_capacity: float = 0.0  # AH (from 4007: FCC_total)
     pcs_status: int = 0
     bms_mode: int = 0
-    active_rack_count: int = 0
+    active_rack_count: int = 0  # (from 4008: online_NO)
+    allowed_power: float = 0.0  # kW (from 4009: allow_power)
+    allowed_charge_power: float = 0.0  # kW (from 4043: allow_power_CHG)
+    allowed_discharge_power: float = 0.0  # kW (from 4042: allow_power_DSC)
+    max_temperature: float = 0.0  # °C (from 4016: all_max_t)
+    min_temperature: float = 0.0  # °C (from 4017: all_min_t)
     rack_enable_status: List[bool] = field(default_factory=lambda: [False] * 24)
     timestamp: datetime = field(default_factory=datetime.now)
 
     @classmethod
     def from_registers(cls, registers: List[int]) -> "SystemData":
-        """Create SystemData from raw Modbus registers."""
-        if len(registers) < 35:
-            raise ValueError(f"Expected at least 35 registers, got {len(registers)}")
+        """
+        Create SystemData from raw Modbus registers starting at 4000.
+        
+        Args:
+            registers: List of register values starting from address 4000
+            
+        Returns:
+            SystemData instance with parsed values
+        """
+        if len(registers) < 44:
+            raise ValueError(f"Expected at least 44 registers, got {len(registers)}")
 
-        def to_signed32(high: int, low: int) -> int:
-            val = (high << 16) | low
-            return val - 4294967296 if val > 2147483647 else val
+        def to_signed16(val: int) -> int:
+            return val - 65536 if val > 32767 else val
 
-        def to_unsigned32(high: int, low: int) -> int:
-            return (high << 16) | low
-
-        # Parse rack enable status from 24 bits
+        # Parse rack enable status from Right_State (4010) and Left_State (4011)
         rack_status = []
-        for i in range(24):
-            bit_index = i % 16
-            reg_index = 11 + (i // 16)
-            if reg_index < len(registers):
-                rack_status.append(bool(registers[reg_index] & (1 << bit_index)))
-            else:
-                rack_status.append(False)
+        # Right_State: Rack 1-12 (register 4010)
+        right_state = registers[10] if len(registers) > 10 else 0
+        for i in range(12):
+            rack_status.append(bool(right_state & (1 << i)))
+        # Left_State: Rack 13-24 (register 4011)
+        left_state = registers[11] if len(registers) > 11 else 0
+        for i in range(12):
+            rack_status.append(bool(left_state & (1 << i)))
 
         return cls(
-            system_status=registers[0],
-            total_voltage=to_unsigned32(registers[1], registers[2]) * 0.1,
-            total_current=to_signed32(registers[3], registers[4]) * 0.1,
-            total_soc=registers[5] * 0.1,
-            total_power=to_signed32(registers[6], registers[7]) * 0.1,
-            pcs_status=registers[8],
-            bms_mode=registers[9],
-            active_rack_count=registers[10],
+            system_status=registers[12] if len(registers) > 12 else 0,  # 4012: SYS_state
+            total_voltage=registers[0] * 0.1,  # 4000: Vol_avg (0.1V)
+            total_current=to_signed16(registers[1]) * 0.1,  # 4001: total_curr (0.1A)
+            total_power=to_signed16(registers[2]) * 0.1,  # 4002: total_power (0.1kW)
+            charge_energy=registers[3] * 0.1,  # 4003: deliy_CHG (0.1kWh)
+            discharge_energy=registers[4] * 0.1,  # 4004: deliy_DSC (0.1kWh)
+            total_soc=registers[5] * 0.1,  # 4005: SOC_avg (0.1%)
+            remaining_capacity=registers[6],  # 4006: RM_total (AH)
+            full_charge_capacity=registers[7],  # 4007: FCC_total (AH)
+            active_rack_count=registers[8],  # 4008: online_NO
+            allowed_power=registers[9] * 0.1,  # 4009: allow_power (0.1kW)
+            max_temperature=to_signed16(registers[16]) if len(registers) > 16 else 0,  # 4016
+            min_temperature=to_signed16(registers[17]) if len(registers) > 17 else 0,  # 4017
+            allowed_discharge_power=registers[42] * 0.1 if len(registers) > 42 else 0,  # 4042
+            allowed_charge_power=registers[43] * 0.1 if len(registers) > 43 else 0,  # 4043
             rack_enable_status=rack_status,
             timestamp=datetime.now(),
         )

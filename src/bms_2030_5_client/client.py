@@ -8,14 +8,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional, Callable, List, Union
+from typing import Optional, Callable, List, Union, Dict
 from pathlib import Path
 
 from bms_2030_5_client.config import Config
 from bms_2030_5_client.modbus import ModbusBMSClient, BMSDataCollector
 from bms_2030_5_client.ieee2030_5 import IEEE2030_5Client
 from bms_2030_5_client.adapters import BMSAdapter
-from bms_2030_5_client.models import BMSSnapshot, DERStatus, DERAvailability
+from bms_2030_5_client.models import (
+    BMSSnapshot,
+    DERStatus,
+    DERAvailability,
+    MirrorUsagePoint,
+    MirrorMeterReading,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +41,7 @@ class BMSClient:
         self,
         config: Config,
         auto_register: bool = True,
+        enable_metering: bool = True,
     ):
         """
         Initialize BMS Client.
@@ -42,9 +49,11 @@ class BMSClient:
         Args:
             config: Configuration object
             auto_register: Automatically register with 2030.5 server
+            enable_metering: Enable meter data upload (MirrorUsagePoint)
         """
         self.config = config
         self.auto_register = auto_register
+        self.enable_metering = enable_metering
         
         # Initialize components
         self.modbus_client = ModbusBMSClient.from_config(config)
@@ -58,7 +67,10 @@ class BMSClient:
         # State
         self._running = False
         self._reporting_task: Optional[asyncio.Task] = None
+        self._metering_task: Optional[asyncio.Task] = None
         self._der_path: Optional[str] = None
+        self._mup_href: Optional[str] = None  # MirrorUsagePoint href
+        self._reading_mrids: Dict[str, str] = {}  # Cached reading mRIDs
         self._callbacks: List[Callable] = []
 
     @classmethod
@@ -132,12 +144,20 @@ class BMSClient:
             except Exception as e:
                 logger.warning(f"Registration failed: {e}")
 
+        # Register MirrorUsagePoint (meter) for metering data
+        if self.enable_metering:
+            await self._register_meter()
+
         # Start data collection
         await self.data_collector.start()
 
         # Start reporting task
         self._running = True
         self._reporting_task = asyncio.create_task(self._reporting_loop())
+
+        # Start metering task if enabled
+        if self.enable_metering and self._mup_href:
+            self._metering_task = asyncio.create_task(self._metering_loop())
 
         logger.info("BMS Client started successfully")
 
@@ -155,6 +175,15 @@ class BMSClient:
             except asyncio.CancelledError:
                 pass
             self._reporting_task = None
+
+        # Stop metering task
+        if self._metering_task:
+            self._metering_task.cancel()
+            try:
+                await self._metering_task
+            except asyncio.CancelledError:
+                pass
+            self._metering_task = None
 
         # Stop data collection
         await self.data_collector.stop()
@@ -210,6 +239,113 @@ class BMSClient:
             )
         except Exception as e:
             logger.error(f"Failed to report status: {e}")
+
+    async def _register_meter(self) -> None:
+        """
+        Register MirrorUsagePoint (meter) with IEEE 2030.5 server.
+        
+        Creates meter readings for:
+        - Total SOC (%)
+        - Total Current (A)
+        - Total Power (kW)
+        - Charge Energy (kWh)
+        - Discharge Energy (kWh)
+        """
+        logger.info("Registering MirrorUsagePoint (meter)...")
+        
+        try:
+            # Create MirrorUsagePoint with reading types
+            mup = self.adapter.create_bms_mirror_usage_point(
+                device_lfdi=self.ieee2030_5_client.lfdi,
+                description="CUBE BMS Meter",
+                post_rate=self.config.ieee2030_5.poll_rate,
+            )
+            
+            # Register with server
+            created_mup, location = await self.ieee2030_5_client.create_mirror_usage_point(mup)
+            self._mup_href = location
+            
+            # Cache reading mRIDs for future updates
+            if created_mup and created_mup.MirrorMeterReading:
+                for reading in created_mup.MirrorMeterReading:
+                    if reading.description and reading.mRID:
+                        # Map description to mRID
+                        name = reading.description.lower().replace(" ", "_")
+                        if "soc" in name:
+                            self._reading_mrids["soc"] = reading.mRID
+                        elif "current" in name:
+                            self._reading_mrids["current"] = reading.mRID
+                        elif "power" in name:
+                            self._reading_mrids["power"] = reading.mRID
+                        elif "charge" in name and "discharge" not in name:
+                            self._reading_mrids["charge_energy"] = reading.mRID
+                        elif "discharge" in name:
+                            self._reading_mrids["discharge_energy"] = reading.mRID
+            
+            logger.info(f"Registered MirrorUsagePoint at: {self._mup_href}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to register MirrorUsagePoint: {e}")
+            self._mup_href = None
+
+    async def _metering_loop(self) -> None:
+        """
+        Metering data upload loop.
+        
+        Periodically uploads meter readings (SOC, Current, Power, Energy)
+        to the IEEE 2030.5 server via MirrorUsagePoint.
+        """
+        # Use same poll rate as DER status, or default to 60 seconds
+        poll_rate = getattr(self.config.ieee2030_5, 'meter_poll_rate', 
+                          self.config.ieee2030_5.poll_rate)
+        
+        logger.info(f"Starting metering loop (interval: {poll_rate}s)")
+        
+        while self._running:
+            try:
+                await self._upload_meter_readings()
+            except Exception as e:
+                logger.error(f"Metering error: {e}")
+
+            await asyncio.sleep(poll_rate)
+
+    async def _upload_meter_readings(self) -> None:
+        """Upload current BMS meter readings to IEEE 2030.5 server."""
+        snapshot = self.latest_snapshot
+        if not snapshot:
+            logger.debug("No BMS data available for metering")
+            return
+
+        if not self._mup_href:
+            logger.debug("No MirrorUsagePoint href available")
+            return
+
+        # Convert BMS snapshot to meter readings
+        readings = self.adapter.snapshot_to_meter_readings(
+            snapshot,
+            reading_mrids=self._reading_mrids,
+        )
+
+        # Upload each reading
+        logger.debug(
+            f"Uploading meter readings: SOC={snapshot.system.total_soc:.1f}%, "
+            f"Current={snapshot.system.total_current:.1f}A, "
+            f"Power={snapshot.system.total_power:.1f}kW"
+        )
+        
+        uploaded_count = 0
+        for reading in readings:
+            try:
+                success = await self.ieee2030_5_client.update_mirror_meter_reading(
+                    self._mup_href,
+                    reading,
+                )
+                if success:
+                    uploaded_count += 1
+            except Exception as e:
+                logger.error(f"Failed to upload {reading.description}: {e}")
+        
+        logger.debug(f"Uploaded {uploaded_count}/{len(readings)} meter readings")
 
     async def get_battery_status(self) -> Optional[BMSSnapshot]:
         """

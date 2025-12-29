@@ -31,7 +31,7 @@ def _get_link_class():
 
 def _parse_element_to_dataclass(element: ET.Element, cls: Type[T]) -> T:
     """
-    Parse XML element to dataclass instance.
+    Parse XML element to dataclass instance
     
     Args:
         element: XML Element

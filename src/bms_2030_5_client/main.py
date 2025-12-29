@@ -44,6 +44,9 @@ Examples:
   # Debug mode
   bms-client --debug
 
+  # Disable metering (only DER status reporting)
+  bms-client --no-metering
+
   # Generate sample config
   bms-client --generate-config sample_config.yaml
         """,
@@ -76,6 +79,12 @@ Examples:
     )
     
     parser.add_argument(
+        "--no-metering",
+        action="store_true",
+        help="Disable meter data upload (MirrorUsagePoint)",
+    )
+    
+    parser.add_argument(
         "--version", "-v",
         action="version",
         version="%(prog)s 0.1.0",
@@ -84,10 +93,18 @@ Examples:
     return parser.parse_args()
 
 
-async def run_client(config_path: str, auto_register: bool = True) -> None:
+async def run_client(
+    config_path: str,
+    auto_register: bool = True,
+    enable_metering: bool = True,
+) -> None:
     """Run the BMS client."""
     config = Config.from_yaml(config_path)
-    client = BMSClient(config, auto_register=auto_register)
+    client = BMSClient(
+        config,
+        auto_register=auto_register,
+        enable_metering=enable_metering,
+    )
     
     try:
         await client.run_forever()
@@ -124,6 +141,7 @@ def main() -> int:
         asyncio.run(run_client(
             str(config_path),
             auto_register=not args.no_register,
+            enable_metering=not args.no_metering,
         ))
         return 0
     except Exception as e:
