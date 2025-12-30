@@ -1,2 +1,4 @@
 *.pyc
 .vscode/
+certs/
+config/config.yaml
