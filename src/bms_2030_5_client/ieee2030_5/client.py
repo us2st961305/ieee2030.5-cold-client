@@ -256,7 +256,10 @@ class IEEE2030_5Client:
 
         try:
             xml_data = dataclass_to_xml(data)
+            logger.debug(f"POST {path} Request:\n{xml_data}")
             response = await self._client.post(path, content=xml_data)
+            logger.debug(f"POST {path} Response Status: {response.status_code}")
+            logger.debug(f"POST {path} Response Body:\n{response.text}")
             response.raise_for_status()
             
             location = response.headers.get("Location", "")
@@ -269,6 +272,9 @@ class IEEE2030_5Client:
             return result, location
             
         except httpx.HTTPStatusError as e:
+            logger.error(f"POST {path} Request:\n{xml_data}")
+            logger.error(f"POST {path} Response Status: {e.response.status_code}")
+            logger.error(f"POST {path} Response Body:\n{e.response.text}")
             raise IEEE2030_5ClientError(f"HTTP error: {e.response.status_code}") from e
 
     async def _put(
@@ -315,7 +321,7 @@ class IEEE2030_5Client:
         else:
             time_link = self._device_capability.TimeLink
         
-        return await self._get(time_link, Time)
+        return await self._get(time_link.href, Time)
 
     async def register_end_device(self, pin: int) -> EndDevice:
         """
@@ -338,7 +344,7 @@ class IEEE2030_5Client:
         
         # Check if device is already registered by fetching EndDeviceList
         try:
-            edev_list = await self._get(edev_list_link)
+            edev_list = await self._get(edev_list_link.href)
             # Search for existing device with matching sFDI
             if hasattr(edev_list, 'EndDevice') and edev_list.EndDevice:
                 for existing_device in edev_list.EndDevice:
@@ -356,7 +362,7 @@ class IEEE2030_5Client:
             changedTime=int(datetime.now().timestamp()),
         )
         
-        _, location = await self._post(edev_list_link, end_device)
+        _, location = await self._post(edev_list_link.href, end_device)
         
         if location:
             self._end_device = await self._get(location, EndDevice)
@@ -517,6 +523,28 @@ class IEEE2030_5Client:
             MirrorUsagePoint resource
         """
         return await self._get(mup_href, MirrorUsagePoint)
+
+    async def update_mirror_usage_point(
+        self,
+        mup_href: str,
+        mup: MirrorUsagePoint,
+    ) -> bool:
+        """
+        Update a MirrorUsagePoint on the server (PUT).
+        
+        This is used to add MirrorMeterReading to an existing MirrorUsagePoint.
+        The server requires a two-step process:
+        1. POST to create MirrorUsagePoint (without MirrorMeterReading)
+        2. PUT to update with MirrorMeterReading
+        
+        Args:
+            mup_href: The href of the MirrorUsagePoint to update
+            mup: MirrorUsagePoint with updated data
+            
+        Returns:
+            True if successful
+        """
+        return await self._put(mup_href, mup)
 
     async def update_mirror_meter_reading(
         self,

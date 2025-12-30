@@ -4,6 +4,8 @@ IEEE 2030.5 data models for DER (Distributed Energy Resource).
 Based on IEEE 2030.5 / Smart Energy Profile 2.0 specification.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import IntEnum, IntFlag
@@ -513,6 +515,17 @@ class MirrorMeterReading:
     ReadingType: Optional[ReadingType] = None
 
 
+def _generate_mrid() -> str:
+    """Generate a valid mRID (HexBinary128 - 32 hex chars)."""
+    import uuid
+    return uuid.uuid4().hex.upper()
+
+
+def _roleflags_to_hex(flags: int) -> str:
+    """Convert roleFlags integer to HexBinary16 (4 hex chars)."""
+    return f"{flags:04X}"
+
+
 @dataclass_json
 @dataclass
 class MirrorUsagePoint:
@@ -529,17 +542,24 @@ class MirrorUsagePoint:
     - Charge/Discharge Power (W)
     - Charge Energy (Wh)
     - Discharge Energy (Wh)
+    
+    Note: mRID and roleFlags must be HexBinary format for IEEE 2030.5
     """
     href: Optional[str] = None
-    mRID: Optional[str] = None
+    mRID: Optional[str] = None  # HexBinary128 - will be auto-generated if None
     description: Optional[str] = None
     version: Optional[int] = None
-    roleFlags: int = RoleFlagsType.IS_MIRROR | RoleFlagsType.IS_DER
+    roleFlags: str = "0009"  # HexBinary16: IS_MIRROR | IS_DER = 0x0009
     serviceCategoryKind: int = ServiceKind.ELECTRICITY
     status: int = 1  # 0=off, 1=on
     deviceLFDI: Optional[str] = None  # HexBinary160
     MirrorMeterReading: List[MirrorMeterReading] = field(default_factory=list)
     postRate: int = 900  # Posting rate in seconds
+    
+    def __post_init__(self):
+        """Auto-generate mRID if not provided."""
+        if self.mRID is None:
+            self.mRID = _generate_mrid()
 
 
 @dataclass_json

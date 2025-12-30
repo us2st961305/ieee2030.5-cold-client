@@ -4,6 +4,7 @@ XML serialization utilities for IEEE 2030.5.
 
 import logging
 import xml.etree.ElementTree as ET
+from enum import Enum
 from typing import Any, Type, TypeVar, get_type_hints, get_origin, get_args
 from dataclasses import fields, is_dataclass
 
@@ -47,7 +48,12 @@ def _parse_element_to_dataclass(element: ET.Element, cls: Type[T]) -> T:
     type_hints = get_type_hints(cls)
     Link = _get_link_class()
     
-    # Parse attributes (href, pollRate, all, etc.)
+    # Initialize list fields
+    for field_name, hint in type_hints.items():
+        origin = get_origin(hint)
+        if origin is list:
+            kwargs[field_name] = []
+        # Parse attributes (href, pollRate, all, etc.)
     for attr_name, attr_value in element.attrib.items():
         attr_name = _strip_namespace(attr_name)
         if attr_name in type_hints:
@@ -81,6 +87,9 @@ def _parse_element_to_dataclass(element: ET.Element, cls: Type[T]) -> T:
             hint = type_hints[child_tag]
             origin = get_origin(hint)
             
+            # Check if this field is a List type
+            is_list_field = origin is list
+            
             actual_type = hint
             if origin:
                 args = get_args(hint)
@@ -99,7 +108,11 @@ def _parse_element_to_dataclass(element: ET.Element, cls: Type[T]) -> T:
                         link_kwargs['all'] = int(attr_value)
                 kwargs[child_tag] = Link(**link_kwargs)
             elif is_dataclass(actual_type):
-                kwargs[child_tag] = _parse_element_to_dataclass(child, actual_type)
+                parsed_value = _parse_element_to_dataclass(child, actual_type)
+                if is_list_field:
+                    kwargs[child_tag].append(parsed_value)
+                else:
+                    kwargs[child_tag] = parsed_value
             elif child.text:
                 if actual_type == int:
                     kwargs[child_tag] = int(child.text)
@@ -181,6 +194,10 @@ def _dataclass_to_element(obj: Any, element: ET.Element) -> None:
         field_name = f.name
         if field_name == 'type_':
             field_name = 'type'
+        
+        # Convert Enum to its value
+        if isinstance(value, Enum):
+            value = value.value
         
         if isinstance(value, (int, float, str, bool)):
             # Simple types as attributes or child elements

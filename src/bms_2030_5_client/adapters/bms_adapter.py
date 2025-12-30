@@ -314,37 +314,48 @@ class BMSAdapter:
         device_lfdi: str,
         description: str = "BMS Battery Storage Meter",
         post_rate: int = 60,
+        include_readings: bool = False,
     ) -> MirrorUsagePoint:
         """
         Create a MirrorUsagePoint for the BMS system.
         
-        This creates the meter registration with all reading types
-        for SOC, Current, Power, and Energy.
+        This creates the meter registration. If include_readings is False,
+        creates without MirrorMeterReading (for initial POST).
+        If include_readings is True, includes all reading types (for PUT update).
+        
+        Note: IEEE 2030.5 server requires two-step process:
+        1. POST MirrorUsagePoint without MirrorMeterReading
+        2. PUT MirrorUsagePoint with MirrorMeterReading
         
         Args:
             device_lfdi: Device LFDI (Long-Form Device Identifier)
             description: Description of the meter
             post_rate: Posting rate in seconds
+            include_readings: Whether to include MirrorMeterReading
             
         Returns:
             MirrorUsagePoint ready to register with server
         """
-        mup = MirrorUsagePoint(
-            mRID=self._generate_mrid(),
-            description=description,
-            version=1,
-            roleFlags=int(RoleFlagsType.IS_MIRROR) | int(RoleFlagsType.IS_DER),
-            serviceCategoryKind=int(ServiceKind.ELECTRICITY),
-            status=1,  # On
-            deviceLFDI=device_lfdi,
-            postRate=post_rate,
-            MirrorMeterReading=[
+        readings = []
+        if include_readings:
+            readings = [
                 self._create_soc_reading_type(),
                 self._create_current_reading_type(),
                 self._create_power_reading_type(),
                 self._create_charge_energy_reading_type(),
                 self._create_discharge_energy_reading_type(),
-            ],
+            ]
+        
+        mup = MirrorUsagePoint(
+            mRID=self._generate_mrid(),
+            description=description,
+            version=1,
+            roleFlags=f"{(int(RoleFlagsType.IS_MIRROR) | int(RoleFlagsType.IS_DER)):04X}",  # HexBinary16
+            serviceCategoryKind=int(ServiceKind.ELECTRICITY),
+            status=1,  # On
+            deviceLFDI=device_lfdi,
+            postRate=post_rate,
+            MirrorMeterReading=readings,
         )
         return mup
 

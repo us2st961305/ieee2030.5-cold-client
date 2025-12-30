@@ -244,6 +244,10 @@ class BMSClient:
         """
         Register MirrorUsagePoint (meter) with IEEE 2030.5 server.
         
+        Uses two-step process required by the server:
+        1. POST MirrorUsagePoint without MirrorMeterReading
+        2. PUT MirrorUsagePoint with MirrorMeterReading
+        
         Creates meter readings for:
         - Total SOC (%)
         - Total Current (A)
@@ -254,35 +258,58 @@ class BMSClient:
         logger.info("Registering MirrorUsagePoint (meter)...")
         
         try:
-            # Create MirrorUsagePoint with reading types
+            # Step 1: Create MirrorUsagePoint WITHOUT MirrorMeterReading
             mup = self.adapter.create_bms_mirror_usage_point(
                 device_lfdi=self.ieee2030_5_client.lfdi,
                 description="CUBE BMS Meter",
                 post_rate=self.config.ieee2030_5.poll_rate,
+                include_readings=False,  # Don't include readings for initial POST
             )
             
-            # Register with server
-            created_mup, location = await self.ieee2030_5_client.create_mirror_usage_point(mup)
+            # Register with server (POST)
+            _, location = await self.ieee2030_5_client.create_mirror_usage_point(mup)
             self._mup_href = location
+            logger.info(f"Created MirrorUsagePoint at: {self._mup_href}")
             
-            # Cache reading mRIDs for future updates
-            if created_mup and created_mup.MirrorMeterReading:
-                for reading in created_mup.MirrorMeterReading:
-                    if reading.description and reading.mRID:
-                        # Map description to mRID
-                        name = reading.description.lower().replace(" ", "_")
-                        if "soc" in name:
-                            self._reading_mrids["soc"] = reading.mRID
-                        elif "current" in name:
-                            self._reading_mrids["current"] = reading.mRID
-                        elif "power" in name:
-                            self._reading_mrids["power"] = reading.mRID
-                        elif "charge" in name and "discharge" not in name:
-                            self._reading_mrids["charge_energy"] = reading.mRID
-                        elif "discharge" in name:
-                            self._reading_mrids["discharge_energy"] = reading.mRID
+            # Step 2: Update MirrorUsagePoint WITH MirrorMeterReading (PUT)
+            mup_with_readings = self.adapter.create_bms_mirror_usage_point(
+                device_lfdi=self.ieee2030_5_client.lfdi,
+                description="CUBE BMS Meter",
+                post_rate=self.config.ieee2030_5.poll_rate,
+                include_readings=True,  # Include readings for PUT update
+            )
+            # Use same mRID as created resource
+            mup_with_readings.mRID = mup.mRID
             
-            logger.info(f"Registered MirrorUsagePoint at: {self._mup_href}")
+            success = await self.ieee2030_5_client.update_mirror_usage_point(
+                self._mup_href,
+                mup_with_readings,
+            )
+            
+            if success:
+                # Fetch the updated resource to cache reading mRIDs
+                created_mup = await self.ieee2030_5_client.get_mirror_usage_point(self._mup_href)
+                
+                # Cache reading mRIDs for future updates
+                if created_mup and created_mup.MirrorMeterReading:
+                    for reading in created_mup.MirrorMeterReading:
+                        if reading.description and reading.mRID:
+                            # Map description to mRID
+                            name = reading.description.lower().replace(" ", "_")
+                            if "soc" in name:
+                                self._reading_mrids["soc"] = reading.mRID
+                            elif "current" in name:
+                                self._reading_mrids["current"] = reading.mRID
+                            elif "power" in name:
+                                self._reading_mrids["power"] = reading.mRID
+                            elif "charge" in name and "discharge" not in name:
+                                self._reading_mrids["charge_energy"] = reading.mRID
+                            elif "discharge" in name:
+                                self._reading_mrids["discharge_energy"] = reading.mRID
+                
+                logger.info(f"Registered MirrorUsagePoint with readings at: {self._mup_href}")
+            else:
+                logger.warning("Failed to update MirrorUsagePoint with readings")
             
         except Exception as e:
             logger.warning(f"Failed to register MirrorUsagePoint: {e}")
