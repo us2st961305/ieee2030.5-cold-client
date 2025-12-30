@@ -179,12 +179,12 @@ class IEEE2030_5Client:
                 if not path.exists():
                     raise AuthenticationError(f"{name} not found: {path}")
 
-            ssl_context = self._create_ssl_context()
+            # ssl_context = self._create_ssl_context()
             
             self._client = httpx.AsyncClient(
                 base_url=self.server_url,
-                verify=ssl_context,
-                cert=(str(self.cert_file), str(self.key_file)),  # Client certificate for mutual TLS
+                verify=ssl.create_default_context(cafile="/app/certs/server_ca.crt"),
+                cert=(str(self.cert_file), str(self.key_file)),
                 timeout=30.0,
                 headers={
                     "Accept": "application/sep+xml",
