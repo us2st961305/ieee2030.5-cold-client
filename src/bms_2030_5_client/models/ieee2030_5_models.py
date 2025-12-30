@@ -515,10 +515,52 @@ class MirrorMeterReading:
     ReadingType: Optional[ReadingType] = None
 
 
-def _generate_mrid() -> str:
-    """Generate a valid mRID (HexBinary128 - 32 hex chars)."""
+# Default IANA PEN - replace with your organization's registered PEN
+# See https://www.iana.org/assignments/enterprise-numbers/
+DEFAULT_IANA_PEN = 0x00000000  # Placeholder - should be replaced with actual PEN
+
+# Reserved prefix for objects being created (accumulating)
+MRID_RESERVED_PREFIX = "FFFFFFFFFFFFFFFFFFFFFFFF"  # 96 bits all 1s
+
+
+def _generate_mrid(pen: Optional[int] = None, reserved: bool = False) -> str:
+    """
+    Generate a valid mRID (HexBinary128 - 32 hex chars).
+    
+    According to IEEE 2030.5 mRIDType specification:
+    - Bits 0-31 (least significant 8 hex chars): IANA PEN provider ID
+    - Bits 32-127 (most significant 24 hex chars): Unique ID assigned by provider
+    
+    Format: [96-bit unique ID][32-bit PEN] = 32 hex characters
+    
+    Special reserved: 0xFFFFFFFFFFFFFFFFFFFFFFFF[PEN] is reserved for
+    objects being created (e.g., a ReadingSet still accumulating).
+    
+    Args:
+        pen: IANA Private Enterprise Number (32-bit). Uses DEFAULT_IANA_PEN if None.
+        reserved: If True, generates reserved mRID for objects being created.
+        
+    Returns:
+        32-character uppercase hex string representing 128-bit mRID.
+    """
     import uuid
-    return uuid.uuid4().hex.upper()
+    
+    if pen is None:
+        pen = DEFAULT_IANA_PEN
+    
+    # Ensure PEN is within 32-bit range
+    pen = pen & 0xFFFFFFFF
+    pen_hex = f"{pen:08X}"
+    
+    if reserved:
+        # Reserved format for objects being created
+        return MRID_RESERVED_PREFIX + pen_hex
+    
+    # Generate 96-bit unique ID (24 hex chars)
+    # Using UUID4 and taking first 96 bits (24 hex chars)
+    unique_id = uuid.uuid4().hex[:24].upper()
+    
+    return unique_id + pen_hex
 
 
 def _roleflags_to_hex(flags: int) -> str:
