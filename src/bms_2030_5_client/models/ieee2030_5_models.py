@@ -276,10 +276,62 @@ class EndDevice:
     changedTime: int = 0
     enabled: bool = True
     DERListLink: Optional[str] = None
+    DeviceInformationLink: Optional[str] = None
     FunctionSetAssignmentsListLink: Optional[str] = None
     RegistrationLink: Optional[str] = None
     PowerStatusLink: Optional[str] = None
     DeviceStatusLink: Optional[str] = None
+
+
+class PowerSourceType(IntEnum):
+    """Power source type for DeviceInformation."""
+    NOT_APPLICABLE = 0
+    MAINS = 1           # Mains power (AC grid)
+    BATTERY = 2         # Battery power
+    LOCAL_GENERATION = 3  # Local generation (e.g., solar)
+    EMERGENCY = 4       # Emergency power
+    UNKNOWN = 5         # Unknown power source
+
+
+@dataclass_json
+@dataclass
+class DeviceInformation:
+    """
+    IEEE 2030.5 Device Information.
+    
+    Descriptive information about a device, including manufacturer details,
+    serial number, and software version. This is a sub-resource of EndDevice.
+    
+    URI: /edev/{id}/di
+    
+    Example XML:
+        <DeviceInformation xmlns="urn:ieee:std:2030.5:ns" href="/edev/1/di">
+            <mfID>12345</mfID>
+            <mfModel>BMS-2000</mfModel>
+            <mfSerialNumber>SN-001</mfSerialNumber>
+            <mfInfo>Battery Storage Unit A</mfInfo>
+            <swVer>1.0.0</swVer>
+        </DeviceInformation>
+    """
+    href: Optional[str] = None
+    # Manufacturer ID (PEN - Private Enterprise Number)
+    mfID: Optional[int] = None
+    # Manufacturer model name/number
+    mfModel: Optional[str] = None
+    # Manufacturer serial number
+    mfSerialNumber: Optional[str] = None
+    # Primary power source
+    primaryPower: Optional[int] = None  # PowerSourceType
+    # Secondary power source
+    secondaryPower: Optional[int] = None  # PowerSourceType
+    # Hardware version
+    mfHwVer: Optional[str] = None
+    # Additional manufacturer info (free text - device name)
+    mfInfo: Optional[str] = None
+    # Software activation time (Unix timestamp)
+    swActTime: Optional[int] = None
+    # Software version
+    swVer: Optional[str] = None
 
 
 @dataclass_json

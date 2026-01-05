@@ -25,6 +25,7 @@ from bms_2030_5_client.models import (
     DERSettings,
     DERStatus,
     DERAvailability,
+    DeviceInformation,
     Time,
     MirrorUsagePoint,
     MirrorUsagePointList,
@@ -455,6 +456,76 @@ class IEEE2030_5Client:
         if self._device_capability.DERProgramListLink:
             return await self._get(self._device_capability.DERProgramListLink)
         return []
+
+    # =========================================================================
+    # Device Information Resources
+    # =========================================================================
+
+    async def get_device_information(self, edev_href: str) -> DeviceInformation:
+        """
+        Get DeviceInformation for an EndDevice.
+        
+        Args:
+            edev_href: EndDevice resource path (e.g., /edev/1)
+            
+        Returns:
+            DeviceInformation resource
+        """
+        di_path = f"{edev_href}/di"
+        return await self._get(di_path, DeviceInformation)
+
+    async def update_device_information(
+        self,
+        edev_href: str,
+        device_info: DeviceInformation,
+    ) -> bool:
+        """
+        Update DeviceInformation for an EndDevice.
+        
+        Sends device information to the IEEE 2030.5 server including
+        manufacturer details, serial number, software version, etc.
+        
+        Args:
+            edev_href: EndDevice resource path (e.g., /edev/1)
+            device_info: DeviceInformation object with device details
+            
+        Returns:
+            True if successful
+            
+        Example:
+            device_info = DeviceInformation(
+                mfID=12345,
+                mfModel="BMS-2000",
+                mfSerialNumber="SN-001",
+                mfInfo="Battery Storage Unit A",
+                swVer="1.0.0",
+                primaryPower=PowerSourceType.MAINS,
+            )
+            await client.update_device_information("/edev/1", device_info)
+        """
+        di_path = f"{edev_href}/di"
+        return await self._put(di_path, device_info)
+
+    async def create_device_information(
+        self,
+        edev_href: str,
+        device_info: DeviceInformation,
+    ) -> tuple[DeviceInformation, str]:
+        """
+        Create DeviceInformation for an EndDevice (POST).
+        
+        Some servers may require POST to create the DeviceInformation
+        resource before it can be updated with PUT.
+        
+        Args:
+            edev_href: EndDevice resource path (e.g., /edev/1)
+            device_info: DeviceInformation object with device details
+            
+        Returns:
+            Tuple of (created DeviceInformation, location href)
+        """
+        di_path = f"{edev_href}/di"
+        return await self._post(di_path, device_info, DeviceInformation)
 
     # =========================================================================
     # Metering / MirrorUsagePoint Resources

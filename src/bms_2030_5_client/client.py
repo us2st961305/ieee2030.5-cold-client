@@ -21,6 +21,8 @@ from bms_2030_5_client.models import (
     DERAvailability,
     MirrorUsagePoint,
     MirrorMeterReading,
+    DeviceInformation,
+    PowerSourceType,
 )
 
 logger = logging.getLogger(__name__)
@@ -388,6 +390,94 @@ class BMSClient:
     async def get_server_time(self):
         """Get time from IEEE 2030.5 server."""
         return await self.ieee2030_5_client.get_time()
+
+    async def update_device_information(
+        self,
+        mf_id: int,
+        mf_model: str,
+        mf_serial_number: str,
+        mf_info: Optional[str] = None,
+        sw_ver: Optional[str] = None,
+        mf_hw_ver: Optional[str] = None,
+        primary_power: int = PowerSourceType.MAINS,
+        secondary_power: Optional[int] = None,
+        sw_act_time: Optional[int] = None,
+    ) -> bool:
+        """
+        Update device information on IEEE 2030.5 server.
+        
+        Sends descriptive device information to the server including
+        manufacturer details, serial number, and software version.
+        
+        Args:
+            mf_id: Manufacturer ID (PEN - Private Enterprise Number)
+            mf_model: Manufacturer model name/number
+            mf_serial_number: Manufacturer serial number
+            mf_info: Additional manufacturer info (e.g., device name)
+            sw_ver: Software version string
+            mf_hw_ver: Hardware version string
+            primary_power: Primary power source (PowerSourceType)
+            secondary_power: Secondary power source (PowerSourceType)
+            sw_act_time: Software activation time (Unix timestamp)
+            
+        Returns:
+            True if successful
+            
+        Example:
+            await client.update_device_information(
+                mf_id=12345,
+                mf_model="BMS-2000",
+                mf_serial_number="SN-001",
+                mf_info="Battery Storage Unit A",
+                sw_ver="1.0.0",
+            )
+        """
+        if not self.ieee2030_5_client._end_device:
+            logger.warning("End device not registered, cannot update device information")
+            return False
+        
+        edev_href = self.ieee2030_5_client._end_device.href
+        if not edev_href:
+            logger.warning("End device href not available")
+            return False
+        
+        device_info = DeviceInformation(
+            mfID=mf_id,
+            mfModel=mf_model,
+            mfSerialNumber=mf_serial_number,
+            mfInfo=mf_info,
+            swVer=sw_ver,
+            mfHwVer=mf_hw_ver,
+            primaryPower=primary_power,
+            secondaryPower=secondary_power,
+            swActTime=sw_act_time,
+        )
+        
+        logger.info(f"Updating device information: {mf_model} ({mf_serial_number})")
+        return await self.ieee2030_5_client.update_device_information(
+            edev_href, device_info
+        )
+
+    async def get_device_information(self) -> Optional[DeviceInformation]:
+        """
+        Get device information from IEEE 2030.5 server.
+        
+        Returns:
+            DeviceInformation or None if not available
+        """
+        if not self.ieee2030_5_client._end_device:
+            logger.warning("End device not registered")
+            return None
+        
+        edev_href = self.ieee2030_5_client._end_device.href
+        if not edev_href:
+            return None
+        
+        try:
+            return await self.ieee2030_5_client.get_device_information(edev_href)
+        except Exception as e:
+            logger.warning(f"Failed to get device information: {e}")
+            return None
 
     async def run_forever(self) -> None:
         """Run client until interrupted."""
