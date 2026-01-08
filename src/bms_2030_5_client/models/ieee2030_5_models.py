@@ -237,6 +237,17 @@ class DER:
     DERStatusLink: Optional[str] = None
 
 
+@dataclass
+class DERList:
+    """
+    List of DER resources.
+    """
+    href: Optional[str] = None
+    all_: int = 0  # Total count
+    results: int = 0  # Number of results in this response
+    DER: List["DER"] = field(default_factory=list)
+
+
 @dataclass_json
 @dataclass
 class Reading:
@@ -271,7 +282,7 @@ class EndDevice:
     Represents the client device in the IEEE 2030.5 hierarchy.
     """
     href: Optional[str] = None
-    lFDI: Optional[bytes] = None  # Long-form device identifier
+    lFDI: Optional[str] = None  # Long-form device identifier (40 hex chars)
     sFDI: Optional[int] = None  # Short-form device identifier
     changedTime: int = 0
     enabled: bool = True
@@ -295,6 +306,14 @@ class PowerSourceType(IntEnum):
 
 @dataclass_json
 @dataclass
+class GPSLocationType:
+    """GPS location coordinates."""
+    lat: Optional[str] = None  # Latitude in degrees
+    lon: Optional[str] = None  # Longitude in degrees
+
+
+@dataclass_json
+@dataclass
 class DeviceInformation:
     """
     IEEE 2030.5 Device Information.
@@ -306,32 +325,48 @@ class DeviceInformation:
     
     Example XML:
         <DeviceInformation xmlns="urn:ieee:std:2030.5:ns" href="/edev/1/di">
+            <lFDI>0123456789ABCDEF0123456789ABCDEF01234567</lFDI>
             <mfID>12345</mfID>
             <mfModel>BMS-2000</mfModel>
+            <mfSerNum>SN-001</mfSerNum>
             <mfSerialNumber>SN-001</mfSerialNumber>
+            <mfDate>1704585600</mfDate>
+            <mfHwVer>1.0</mfHwVer>
             <mfInfo>Battery Storage Unit A</mfInfo>
+            <primaryPower>1</primaryPower>
+            <secondaryPower>2</secondaryPower>
             <swVer>1.0.0</swVer>
+            <swActTime>1704585600</swActTime>
+            <gpsLocation><lat>25.0330</lat><lon>121.5654</lon></gpsLocation>
         </DeviceInformation>
     """
     href: Optional[str] = None
+    # Long-form device identifier (40 hex characters - required)
+    lFDI: Optional[str] = None
     # Manufacturer ID (PEN - Private Enterprise Number)
     mfID: Optional[int] = None
     # Manufacturer model name/number
     mfModel: Optional[str] = None
-    # Manufacturer serial number
+    # Manufacturer serial number (short form - required)
+    mfSerNum: Optional[str] = None
+    # Manufacturer serial number (long form)
     mfSerialNumber: Optional[str] = None
+    # Manufacture date (Unix timestamp - required)
+    mfDate: Optional[int] = None
     # Primary power source
     primaryPower: Optional[int] = None  # PowerSourceType
-    # Secondary power source
+    # Secondary power source (required)
     secondaryPower: Optional[int] = None  # PowerSourceType
-    # Hardware version
+    # Hardware version (required)
     mfHwVer: Optional[str] = None
     # Additional manufacturer info (free text - device name)
     mfInfo: Optional[str] = None
-    # Software activation time (Unix timestamp)
+    # Software activation time (Unix timestamp - required)
     swActTime: Optional[int] = None
     # Software version
     swVer: Optional[str] = None
+    # GPS location (required)
+    gpsLocation: Optional[GPSLocationType] = None
 
 
 @dataclass_json

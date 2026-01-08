@@ -12,6 +12,7 @@ from bms_2030_5_client.models.bms_models import (
 from bms_2030_5_client.models.ieee2030_5_models import (
     Link,
     DER,
+    DERList,
     DERCapability,
     DERSettings,
     DERStatus,
@@ -32,6 +33,7 @@ from bms_2030_5_client.models.ieee2030_5_models import (
     EndDevice,
     DeviceCapability,
     DeviceInformation,
+    GPSLocationType,
     PowerSourceType,
     Time,
     Reading,
@@ -64,6 +66,7 @@ __all__ = [
     # IEEE 2030.5 models
     "Link",
     "DER",
+    "DERList",
     "DERCapability",
     "DERSettings",
     "DERStatus",
@@ -84,6 +87,7 @@ __all__ = [
     "EndDevice",
     "DeviceCapability",
     "DeviceInformation",
+    "GPSLocationType",
     "PowerSourceType",
     "Time",
     "Reading",

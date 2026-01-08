@@ -21,6 +21,7 @@ from bms_2030_5_client.models import (
     DeviceCapability,
     EndDevice,
     DER,
+    DERList,
     DERCapability,
     DERSettings,
     DERStatus,
@@ -371,6 +372,39 @@ class IEEE2030_5Client:
         
         raise IEEE2030_5ClientError("Registration failed: no location returned")
 
+    async def find_end_device_by_sfdi(self) -> Optional[EndDevice]:
+        """
+        Find existing EndDevice by sFDI.
+        
+        Searches the EndDeviceList for a device matching this client's sFDI.
+        
+        Returns:
+            EndDevice if found, None otherwise
+        """
+        if not self._device_capability:
+            await self.get_device_capability()
+
+        edev_list_link = self._device_capability.EndDeviceListLink
+        if not edev_list_link:
+            logger.warning("EndDeviceListLink not available")
+            return None
+        
+        try:
+            edev_list = await self._get(edev_list_link.href, EndDeviceList)
+            if edev_list.EndDevice:
+                # Handle both single EndDevice and list of EndDevices
+                devices = edev_list.EndDevice if isinstance(edev_list.EndDevice, list) else [edev_list.EndDevice]
+                for edev in devices:
+                    if edev.sFDI == self.sfdi:
+                        logger.info(f"Found EndDevice with sFDI {self.sfdi} at {edev.href}")
+                        self._end_device = edev
+                        return edev
+            logger.debug(f"No EndDevice found with sFDI: {self.sfdi}")
+            return None
+        except IEEE2030_5ClientError as e:
+            logger.warning(f"Could not fetch EndDeviceList: {e}")
+            return None
+
     async def get_self_device(self) -> EndDevice:
         """Get self device resource."""
         if not self._device_capability:
@@ -390,8 +424,50 @@ class IEEE2030_5Client:
         
         if self._end_device.DERListLink:
             # Returns DERList, extract DER items
-            return await self._get(self._end_device.DERListLink)
+            der_list = await self._get(self._end_device.DERListLink.href, DERList)
+            # Handle both single DER and list of DERs (same issue as EndDevice)
+            if der_list.DER:
+                return der_list.DER if isinstance(der_list.DER, list) else [der_list.DER]
         return []
+
+    async def get_or_create_der(self, description: str = "Battery Energy Storage System") -> Optional[DER]:
+        """
+        Get existing DER or create a new one.
+        
+        Args:
+            description: DER description
+            
+        Returns:
+            DER resource with href
+        """
+        if not self._end_device:
+            raise IEEE2030_5ClientError("End device not registered")
+        
+        # Try to get existing DER
+        der_list = await self.get_der_list()
+        if der_list:
+            logger.info(f"Found existing DER: {der_list[0].href}")
+            return der_list[0]
+        
+        # Create new DER if none exists
+        if not self._end_device.DERListLink:
+            logger.warning("DERListLink not available")
+            return None
+        
+        logger.info("Creating new DER resource...")
+        new_der = DER(description=description)
+        
+        try:
+            _, location = await self._post(self._end_device.DERListLink.href, new_der)
+            if location:
+                # Fetch the created DER to get full details
+                created_der = await self._get(location, DER)
+                logger.info(f"Created DER at: {created_der.href}")
+                return created_der
+        except Exception as e:
+            logger.error(f"Failed to create DER: {e}")
+        
+        return None
 
     async def update_der_status(self, der_path: str, status: DERStatus) -> bool:
         """

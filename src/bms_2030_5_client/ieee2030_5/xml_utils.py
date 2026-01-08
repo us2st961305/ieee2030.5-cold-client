@@ -107,6 +107,21 @@ def _parse_element_to_dataclass(element: ET.Element, cls: Type[T]) -> T:
                     elif attr_name == 'all':
                         link_kwargs['all'] = int(attr_value)
                 kwargs[child_tag] = Link(**link_kwargs)
+            elif origin is list:
+                # Handle List[T] types - collect all matching elements
+                if child_tag not in kwargs:
+                    kwargs[child_tag] = []
+                if is_dataclass(actual_type):
+                    kwargs[child_tag].append(_parse_element_to_dataclass(child, actual_type))
+                elif child.text:
+                    if actual_type == int:
+                        kwargs[child_tag].append(int(child.text))
+                    elif actual_type == float:
+                        kwargs[child_tag].append(float(child.text))
+                    elif actual_type == bool:
+                        kwargs[child_tag].append(child.text.lower() in ('true', '1', 'yes'))
+                    else:
+                        kwargs[child_tag].append(child.text)
             elif is_dataclass(actual_type):
                 parsed_value = _parse_element_to_dataclass(child, actual_type)
                 if is_list_field:
@@ -206,6 +221,10 @@ def _dataclass_to_element(obj: Any, element: ET.Element) -> None:
             else:
                 child = ET.SubElement(element, field_name)
                 child.text = str(value)
+        elif isinstance(value, bytes):
+            # Bytes (e.g., lFDI, mRID) as hex string
+            child = ET.SubElement(element, field_name)
+            child.text = value.hex().upper()
         elif isinstance(value, Link):
             # Link objects
             child = ET.SubElement(element, field_name)

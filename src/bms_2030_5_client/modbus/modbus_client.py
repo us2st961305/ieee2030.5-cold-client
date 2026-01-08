@@ -41,8 +41,7 @@ class ModbusBMSClient:
     MAX_RACKS = 24
 
     # Number of registers to read
-    # System registers: 4000-4043 (need 44 registers to include allow_power_CHG at 4043)
-    SYSTEM_REGISTER_COUNT = 44
+    SYSTEM_REGISTER_COUNT = 44  # Read 4000-4043 for allowed_power_DSC/CHG
     RACK_REGISTER_COUNT = 30
 
     def __init__(

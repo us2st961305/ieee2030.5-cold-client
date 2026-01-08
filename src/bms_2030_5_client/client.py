@@ -70,6 +70,7 @@ class BMSClient:
         self._running = False
         self._reporting_task: Optional[asyncio.Task] = None
         self._metering_task: Optional[asyncio.Task] = None
+        self._edev_href: Optional[str] = None  # EndDevice href (e.g., /edev/97)
         self._der_path: Optional[str] = None
         self._mup_href: Optional[str] = None  # MirrorUsagePoint href
         self._reading_mrids: Dict[str, str] = {}  # Cached reading mRIDs
@@ -131,24 +132,74 @@ class BMSClient:
             await self.modbus_client.disconnect()
             raise RuntimeError("Failed to connect to IEEE 2030.5 server")
 
-        # Register with server
+        # Register with server (or find existing device)
         if self.auto_register:
-            logger.info("Registering end device...")
+            logger.info("Checking for existing EndDevice by sFDI...")
             try:
-                end_device = await self.ieee2030_5_client.register_end_device(
-                    pin=self.config.ieee2030_5.pin
-                )
-                logger.info(f"Registered end device: {end_device.href}")
+                # First check if device already exists
+                existing_edev = await self.ieee2030_5_client.find_end_device_by_sfdi()
                 
-                # Get DER path for status updates
-                if end_device.DERListLink:
-                    self._der_path = end_device.DERListLink
+                if existing_edev:
+                    logger.info(f"Found existing EndDevice: {existing_edev.href}")
+                    self._edev_href = existing_edev.href
+                else:
+                    # Register new device
+                    logger.info("No existing device found, registering new EndDevice...")
+                    end_device = await self.ieee2030_5_client.register_end_device(
+                        pin=self.config.ieee2030_5.pin
+                    )
+                    logger.info(f"Registered end device: {end_device.href}")
+                    self._edev_href = end_device.href
+                
+                # Get or create DER resource and build complete path
+                if self._edev_href:
+                    logger.info("Getting or creating DER resource...")
+                    der = await self.ieee2030_5_client.get_or_create_der(
+                        description="CUBE Battery Management System"
+                    )
+                    if der and der.href:
+                        self._der_path = der.href
+                        logger.info(f"Using DER path: {self._der_path}")
+                    else:
+                        logger.warning("Could not get or create DER resource")
+                    
             except Exception as e:
-                logger.warning(f"Registration failed: {e}")
+                logger.warning(f"Registration/lookup failed: {e}")
+                import traceback
+                traceback.print_exc()
 
         # Register MirrorUsagePoint (meter) for metering data
         if self.enable_metering:
             await self._register_meter()
+
+        # Update device information
+        if self._edev_href:
+            logger.info("Updating device information...")
+            try:
+                import time
+                current_time = int(time.time())
+                mfg_date = current_time - (365 * 24 * 60 * 60)  # 1 year ago
+                
+                await self.update_device_information(
+                    mf_id=99400,  # Example manufacturer ID
+                    mf_model="CUBE",
+                    mf_serial_number="CUBE-001",
+                    mf_ser_num="CUBE-001",  # Required: short form serial number
+                    mf_date=mfg_date,  # Required: manufacture date
+                    mf_hw_ver="1.0",  # Required: hardware version
+                    secondary_power=2,  # Required: Battery backup
+                    sw_act_time=current_time,  # Required: software activation time
+                    gps_lat="25.0330",  # Required: Taipei latitude
+                    gps_lon="121.5654",  # Required: Taipei longitude
+                    mf_info="CUBE Battery Management System",
+                    sw_ver="1.0.0",
+                    primary_power=1,  # Mains power
+                )
+                logger.info("Device information updated successfully")
+            except Exception as e:
+                logger.warning(f"Failed to update device information: {e}")
+                import traceback
+                traceback.print_exc()
 
         # Start data collection
         await self.data_collector.start()
@@ -396,12 +447,16 @@ class BMSClient:
         mf_id: int,
         mf_model: str,
         mf_serial_number: str,
+        mf_ser_num: str,
+        mf_date: int,
+        mf_hw_ver: str,
+        secondary_power: int,
+        sw_act_time: int,
+        gps_lat: str,
+        gps_lon: str,
         mf_info: Optional[str] = None,
         sw_ver: Optional[str] = None,
-        mf_hw_ver: Optional[str] = None,
         primary_power: int = PowerSourceType.MAINS,
-        secondary_power: Optional[int] = None,
-        sw_act_time: Optional[int] = None,
     ) -> bool:
         """
         Update device information on IEEE 2030.5 server.
@@ -412,25 +467,20 @@ class BMSClient:
         Args:
             mf_id: Manufacturer ID (PEN - Private Enterprise Number)
             mf_model: Manufacturer model name/number
-            mf_serial_number: Manufacturer serial number
+            mf_serial_number: Manufacturer serial number (long form)
+            mf_ser_num: Manufacturer serial number (short form, required)
+            mf_date: Manufacture date (Unix timestamp, required)
+            mf_hw_ver: Hardware version (required)
+            secondary_power: Secondary power source (PowerSourceType, required)
+            sw_act_time: Software activation time (Unix timestamp, required)
+            gps_lat: GPS latitude (required)
+            gps_lon: GPS longitude (required)
             mf_info: Additional manufacturer info (e.g., device name)
             sw_ver: Software version string
-            mf_hw_ver: Hardware version string
             primary_power: Primary power source (PowerSourceType)
-            secondary_power: Secondary power source (PowerSourceType)
-            sw_act_time: Software activation time (Unix timestamp)
             
         Returns:
             True if successful
-            
-        Example:
-            await client.update_device_information(
-                mf_id=12345,
-                mf_model="BMS-2000",
-                mf_serial_number="SN-001",
-                mf_info="Battery Storage Unit A",
-                sw_ver="1.0.0",
-            )
         """
         if not self.ieee2030_5_client._end_device:
             logger.warning("End device not registered, cannot update device information")
@@ -441,16 +491,22 @@ class BMSClient:
             logger.warning("End device href not available")
             return False
         
+        from bms_2030_5_client.models import GPSLocationType
+        
         device_info = DeviceInformation(
+            lFDI=self.ieee2030_5_client.lfdi,  # Already a hex string (40 chars)
             mfID=mf_id,
             mfModel=mf_model,
+            mfSerNum=mf_ser_num,
             mfSerialNumber=mf_serial_number,
-            mfInfo=mf_info,
-            swVer=sw_ver,
+            mfDate=mf_date,
             mfHwVer=mf_hw_ver,
+            mfInfo=mf_info,
             primaryPower=primary_power,
             secondaryPower=secondary_power,
+            swVer=sw_ver,
             swActTime=sw_act_time,
+            gpsLocation=GPSLocationType(lat=gps_lat, lon=gps_lon),
         )
         
         logger.info(f"Updating device information: {mf_model} ({mf_serial_number})")
