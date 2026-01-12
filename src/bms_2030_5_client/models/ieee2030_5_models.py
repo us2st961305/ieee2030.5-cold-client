@@ -294,6 +294,20 @@ class EndDevice:
     DeviceStatusLink: Optional[str] = None
 
 
+@dataclass_json
+@dataclass
+class EndDeviceList:
+    """
+    List of EndDevice resources.
+    
+    IEEE 2030.5 resource that contains multiple EndDevice instances.
+    """
+    href: Optional[str] = None
+    all: int = 0  # Total count
+    results: int = 0  # Number of results in this response
+    EndDevice: List["EndDevice"] = field(default_factory=list)
+
+
 class PowerSourceType(IntEnum):
     """Power source type for DeviceInformation."""
     NOT_APPLICABLE = 0

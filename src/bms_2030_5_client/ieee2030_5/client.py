@@ -20,6 +20,7 @@ from bms_2030_5_client.config import Config, IEEE2030_5Config
 from bms_2030_5_client.models import (
     DeviceCapability,
     EndDevice,
+    EndDeviceList,
     DER,
     DERList,
     DERCapability,

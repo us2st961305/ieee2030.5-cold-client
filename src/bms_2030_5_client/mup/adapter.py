@@ -77,7 +77,7 @@ class MirrorUsagePointAdapter:
         readings = []
         if include_readings:
             readings = [
-                self._create_soc_reading_type(),
+                # self._create_soc_reading_type(),
                 self._create_current_reading_type(),
                 self._create_power_reading_type(),
                 self._create_charge_energy_reading_type(),
