@@ -75,6 +75,7 @@ class BMSAdapter:
         self.nominal_voltage = nominal_voltage
         self.max_power = max_power
         self.max_current = max_current
+        self._mrid_counter = 0  # Counter for sequential MRID generation
 
     def _to_active_power(self, watts: float) -> ActivePower:
         """Convert watts to ActivePower with appropriate multiplier."""
@@ -306,8 +307,14 @@ class BMSAdapter:
     # =========================================================================
 
     def _generate_mrid(self) -> str:
-        """Generate a unique mRID for meter resources."""
-        return uuid.uuid4().hex[:32].upper()
+        """
+        Generate a unique mRID for meter resources.
+        Uses sequential numbering starting from 1, incrementing for each registration.
+        """
+        self._mrid_counter += 1
+        # Generate 32-character hex string with sequential number
+        # Format: zero-padded to 32 hex characters
+        return f"{self._mrid_counter:032X}"
 
     def create_bms_mirror_usage_point(
         self,
