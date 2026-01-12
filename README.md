@@ -2,6 +2,8 @@
 
 一個用於連接 IEEE 2030.5 伺服器並整合電池管理系統（BMS）的 Python 客戶端。
 
+> **📦 Recent Restructuring:** The codebase has been reorganized into modular components for better maintainability. See [RESTRUCTURING.md](RESTRUCTURING.md) for details about the new `ders`, `dera`, and `mup` modules.
+
 ## 功能特點
 
 - **IEEE 2030.5 協定支援**：完整實作 CSIP (Common Smart Inverter Profile) 客戶端
