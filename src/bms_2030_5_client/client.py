@@ -70,6 +70,7 @@ class BMSClient:
         self._running = False
         self._reporting_task: Optional[asyncio.Task] = None
         self._metering_task: Optional[asyncio.Task] = None
+        self._battery_status_task: Optional[asyncio.Task] = None
         self._edev_href: Optional[str] = None  # EndDevice href (e.g., /edev/97)
         self._der_path: Optional[str] = None
         self._mup_href: Optional[str] = None  # MirrorUsagePoint href
@@ -212,6 +213,9 @@ class BMSClient:
         if self.enable_metering and self._mup_href:
             self._metering_task = asyncio.create_task(self._metering_loop())
 
+        # Start battery status reporting to Supabase
+        self._battery_status_task = asyncio.create_task(self._battery_status_loop())
+
         logger.info("BMS Client started successfully")
 
     async def stop(self) -> None:
@@ -237,6 +241,15 @@ class BMSClient:
             except asyncio.CancelledError:
                 pass
             self._metering_task = None
+
+        # Stop battery status task
+        if self._battery_status_task:
+            self._battery_status_task.cancel()
+            try:
+                await self._battery_status_task
+            except asyncio.CancelledError:
+                pass
+            self._battery_status_task = None
 
         # Stop data collection
         await self.data_collector.stop()
@@ -426,6 +439,62 @@ class BMSClient:
                 logger.error(f"Failed to upload {reading.description}: {e}")
         
         logger.debug(f"Uploaded {uploaded_count}/{len(readings)} meter readings")
+
+    async def _battery_status_loop(self) -> None:
+        """
+        Battery status reporting loop.
+        
+        Periodically sends battery health metrics (SOH, cycles) to Supabase.
+        Sends every 5 minutes (300 seconds).
+        """
+        import httpx
+        
+        interval = 300  # 5 minutes
+        supabase_url = "https://tspjubrehulrjhreptva.supabase.co/functions/v1/battery-status"
+        
+        logger.info(f"Starting battery status reporting loop (interval: {interval}s)")
+        
+        while self._running:
+            try:
+                await self._send_battery_status(supabase_url)
+            except Exception as e:
+                logger.error(f"Battery status reporting error: {e}")
+
+            await asyncio.sleep(interval)
+
+    async def _send_battery_status(self, url: str) -> None:
+        """Send battery status to Supabase endpoint."""
+        import httpx
+        
+        # Get device LFDI
+        lfdi = self.ieee2030_5_client.lfdi
+        if not lfdi:
+            logger.warning("Cannot send battery status: LFDI not available")
+            return
+        
+        # Fixed values as requested
+        payload = {
+            "lfdi": lfdi,
+            "cycles": 0,
+            "soh": 80
+        }
+        
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"}
+                )
+                
+                if response.status_code in (200, 201):
+                    logger.info(f"Battery status sent successfully: LFDI={lfdi}, SOH=80, Cycles=0")
+                else:
+                    logger.warning(
+                        f"Battery status upload failed: {response.status_code} - {response.text}"
+                    )
+        except Exception as e:
+            logger.error(f"Failed to send battery status: {e}")
 
     async def get_battery_status(self) -> Optional[BMSSnapshot]:
         """
