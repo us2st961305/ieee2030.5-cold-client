@@ -29,7 +29,6 @@ from bms_2030_5_client.models.ieee2030_5_models import (
     OperationalModeStatusValue,
     InverterStatusValue,
     StorageModeStatusValue,
-    AlarmStatusValue,
     Temperature,
     EndDevice,
     EndDeviceList,
@@ -56,6 +55,9 @@ from bms_2030_5_client.models.ieee2030_5_models import (
     MirrorReadingSet,
     MirrorUsagePoint,
     MirrorUsagePointList,
+    # LogEvent models
+    LogEvent,
+    LogEventList,
 )
 
 __all__ = [
@@ -111,4 +113,7 @@ __all__ = [
     "MirrorReadingSet",
     "MirrorUsagePoint",
     "MirrorUsagePointList",
+    # LogEvent models
+    "LogEvent",
+    "LogEventList",
 ]

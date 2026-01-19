@@ -32,6 +32,7 @@ from bms_2030_5_client.models import (
     MirrorUsagePoint,
     MirrorUsagePointList,
     MirrorMeterReading,
+    LogEvent,
 )
 from bms_2030_5_client.ieee2030_5.xml_utils import (
     dataclass_to_xml,
@@ -738,5 +739,57 @@ class IEEE2030_5Client:
         success = True
         for reading in readings:
             if not await self.update_mirror_meter_reading(mup_href, reading):
+                success = False
+        return success
+
+    # =========================================================================
+    # LogEvent Operations
+    # =========================================================================
+
+    async def post_log_event(
+        self,
+        edev_path: str,
+        log_event: LogEvent,
+    ) -> bool:
+        """
+        Post a LogEvent to the server's Log Event List (lel).
+        
+        Args:
+            edev_path: End device path (e.g., "/edev/123")
+            log_event: LogEvent object to post
+            
+        Returns:
+            True if successful
+        """
+        lel_path = f"{edev_path}/lel"
+        try:
+            _, location = await self._post(lel_path, log_event, None)
+            logger.info(
+                f"Posted LogEvent: code={log_event.logEventCode}, "
+                f"id={log_event.logEventID}, details={log_event.details}"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to post LogEvent: {e}")
+            return False
+
+    async def post_log_events(
+        self,
+        edev_path: str,
+        log_events: list[LogEvent],
+    ) -> bool:
+        """
+        Post multiple LogEvents to the server.
+        
+        Args:
+            edev_path: End device path (e.g., "/edev/123")
+            log_events: List of LogEvent objects
+            
+        Returns:
+            True if all events posted successfully
+        """
+        success = True
+        for event in log_events:
+            if not await self.post_log_event(edev_path, event):
                 success = False
         return success

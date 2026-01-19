@@ -23,6 +23,13 @@ from bms_2030_5_client.models import (
     MirrorMeterReading,
     DeviceInformation,
     PowerSourceType,
+    LogEvent,
+)
+from bms_2030_5_client.protocols import (
+    FunctionSetIdentifier,
+    LogEventCode,
+    LOG_EVENT_CODE_DESCRIPTIONS,
+    AlarmStatusType,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,6 +83,10 @@ class BMSClient:
         self._mup_href: Optional[str] = None  # MirrorUsagePoint href
         self._reading_mrids: Dict[str, str] = {}  # Cached reading mRIDs
         self._callbacks: List[Callable] = []
+        
+        # Alarm tracking for LogEvent
+        self._previous_alarm_status: int = 0  # Previous alarm status (bitfield)
+        self._log_event_id_counter: int = 0  # Unique LogEvent ID counter
 
     @classmethod
     def from_config(cls, config_path: Union[str, Path]) -> "BMSClient":
@@ -290,9 +301,17 @@ class BMSClient:
         # Convert to IEEE 2030.5 models
         der_status = self.adapter.snapshot_to_der_status(snapshot)
         der_availability = self.adapter.snapshot_to_der_availability(snapshot)
+        
+        # Get current alarm status from DERStatus
+        current_alarm = 0
+        if der_status.alarmStatus:
+            try:
+                current_alarm = int(der_status.alarmStatus, 16)
+            except (ValueError, TypeError):
+                current_alarm = 0
 
         # Report to server
-        logger.debug(f"Reporting DER status: SOC={snapshot.average_soc:.1f}%")
+        logger.debug(f"Reporting DER status: SOC={snapshot.average_soc:.1f}%, alarmStatus={der_status.alarmStatus}")
         
         try:
             await self.ieee2030_5_client.update_der_status(
@@ -303,8 +322,88 @@ class BMSClient:
                 self._der_path,
                 der_availability,
             )
+            
+            # Check for alarm status changes and post LogEvents
+            if self._edev_href:
+                await self._check_and_post_alarm_events(current_alarm)
+                
         except Exception as e:
             logger.error(f"Failed to report status: {e}")
+
+    async def _check_and_post_alarm_events(self, current_alarm: int) -> None:
+        """
+        Check for alarm status changes and post LogEvents.
+        
+        Compares current alarm status with previous status and posts
+        LogEvents for any bits that changed (set or cleared).
+        
+        Args:
+            current_alarm: Current alarm status bitfield
+        """
+        import time
+        
+        previous = self._previous_alarm_status
+        
+        # Find changed bits
+        changed_bits = previous ^ current_alarm
+        
+        if changed_bits == 0:
+            # No changes
+            return
+        
+        logger.info(f"Alarm status changed: {previous:08X} -> {current_alarm:08X}")
+        
+        # Check each bit (0-10 for standard IEEE 2030.5 alarms)
+        for bit in range(11):
+            bit_mask = 1 << bit
+            
+            if not (changed_bits & bit_mask):
+                continue
+            
+            # This bit changed
+            is_now_set = bool(current_alarm & bit_mask)
+            
+            # Create LogEvent
+            self._log_event_id_counter += 1
+            ts = int(time.time())
+            
+            if is_now_set:
+                # Alarm triggered (normal -> abnormal)
+                log_event_code = bit  # LogEventCode matches bit position
+                details = LOG_EVENT_CODE_DESCRIPTIONS.get(
+                    bit, f"DER fault bit {bit} triggered"
+                )
+            else:
+                # Alarm cleared (abnormal -> normal)
+                log_event_code = LogEventCode.DER_FAULT_CLEARED + bit  # 128 + bit
+                alarm_name = LOG_EVENT_CODE_DESCRIPTIONS.get(bit, f"Bit {bit}")
+                details = f"{alarm_name.replace(' detected', '')} cleared"
+            
+            log_event = LogEvent(
+                createdDateTime=ts,
+                functionSet=FunctionSetIdentifier.DER,  # 11
+                logEventCode=log_event_code,
+                logEventID=self._log_event_id_counter,
+                logEventPEN=0,  # IEEE defined
+                profileID=2,    # IEEE 2030.5
+                details=details,
+            )
+            
+            # Post the LogEvent
+            try:
+                await self.ieee2030_5_client.post_log_event(
+                    self._edev_href,
+                    log_event,
+                )
+                logger.info(
+                    f"Posted LogEvent: id={log_event.logEventID}, "
+                    f"code={log_event_code}, details={details}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to post LogEvent: {e}")
+        
+        # Update previous alarm status
+        self._previous_alarm_status = current_alarm
 
     async def _register_meter(self) -> None:
         """

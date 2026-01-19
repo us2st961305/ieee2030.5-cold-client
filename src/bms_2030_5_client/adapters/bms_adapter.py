@@ -30,7 +30,6 @@ from bms_2030_5_client.models import (
     OperationalModeStatusType,
     ConnectStatusValue,
     OperationalModeStatusValue,
-    AlarmStatusValue,
     # Metering models
     MirrorUsagePoint,
     MirrorMeterReading,
@@ -253,7 +252,7 @@ class BMSAdapter:
         return DERStatus(
             href=href,
             readingTime=ts,
-            alarmStatus=AlarmStatusValue(dateTime=ts, value=f"{alarm_status:08X}") if alarm_status != 0 else None,
+            alarmStatus=f"{alarm_status:08X}",  # Always send, even when 00000000
             genConnectStatus=ConnectStatusValue(dateTime=ts, value=f"{int(connect_status):02X}"),
             operationalModeStatus=OperationalModeStatusValue(dateTime=ts, value=f"{int(op_mode):02X}"),
             stateOfChargeStatus=self._to_soc(rack.soc),

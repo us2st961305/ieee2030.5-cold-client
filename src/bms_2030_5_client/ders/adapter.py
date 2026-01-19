@@ -14,7 +14,6 @@ from bms_2030_5_client.models import (
     OperationalModeStatusType,
     ConnectStatusValue,
     OperationalModeStatusValue,
-    AlarmStatusValue,
     StateOfCharge,
 )
 
@@ -37,6 +36,7 @@ def modbus_error_to_alarm_status(
     Convert Modbus error status bits to IEEE 2030.5 AlarmStatusType.
     
     Maps BMS error registers to IEEE 2030.5 DERStatus.alarmStatus field.
+    Only uses standard IEEE 2030.5 alarm bits (0-10). Bits 11-31 are reserved.
     
     Args:
         error_status: RS-485 ErrorStatusBits (register 0x0008)
@@ -49,24 +49,31 @@ def modbus_error_to_alarm_status(
     alarm = 0
     
     # === Map RS-485 ErrorStatusBits (0x0008) ===
+    # Level 2/3 alarms -> DER_FAULT_EMERGENCY_LOCAL (Bit 7)
     if error_status & ErrorStatusBits.LEVEL2_ALARM:
-        alarm |= AlarmStatusType.DER_FAULT_LEVEL2_ALARM
+        alarm |= AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL
     if error_status & ErrorStatusBits.LEVEL3_ALARM:
-        alarm |= AlarmStatusType.DER_FAULT_LEVEL3_ALARM
+        alarm |= AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL
+    # PF Protection / Relay stuck -> DER_FAULT_EMERGENCY_LOCAL (Bit 7)
     if error_status & ErrorStatusBits.PF_PROTECTION:
-        alarm |= AlarmStatusType.DER_FAULT_PF_PROTECTION
+        alarm |= AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL
     if error_status & ErrorStatusBits.RELAY_STUCK:
-        alarm |= AlarmStatusType.DER_FAULT_RELAY_STUCK
+        alarm |= AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL
+    # Voltage alarm -> DER_FAULT_OVER_VOLTAGE (Bit 1)
     if error_status & ErrorStatusBits.VOLTAGE_ALARM:
-        alarm |= AlarmStatusType.DER_FAULT_OVER_VOLTAGE  # Could be over or under
+        alarm |= AlarmStatusType.DER_FAULT_OVER_VOLTAGE
+    # Temp alarm -> DER_FAULT_EMERGENCY_LOCAL (Bit 7, no temp-specific bit in standard)
     if error_status & ErrorStatusBits.TEMP_ALARM:
-        alarm |= AlarmStatusType.DER_FAULT_OVER_TEMP  # Could be over or under
+        alarm |= AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL
+    # Current alarm -> DER_FAULT_OVER_CURRENT (Bit 0)
     if error_status & ErrorStatusBits.CURRENT_ALARM:
         alarm |= AlarmStatusType.DER_FAULT_OVER_CURRENT
+    # Comm error -> DER_FAULT_EMERGENCY_REMOTE (Bit 8)
     if error_status & ErrorStatusBits.COMM_ERROR:
-        alarm |= AlarmStatusType.DER_FAULT_COMM_ERROR
+        alarm |= AlarmStatusType.DER_FAULT_EMERGENCY_REMOTE
+    # Balance error -> DER_FAULT_CURRENT_IMBALANCE (Bit 6)
     if error_status & ErrorStatusBits.BALANCE_ERROR:
-        alarm |= AlarmStatusType.DER_FAULT_BALANCE_ERROR
+        alarm |= AlarmStatusType.DER_FAULT_CURRENT_IMBALANCE
     
     # === Map CUBE RackFlagBits (7020) - Low Byte (Alarms) ===
     if rack_flag & RackFlagBits.CELL_OV_ALARM:
@@ -74,9 +81,9 @@ def modbus_error_to_alarm_status(
     if rack_flag & RackFlagBits.CELL_UV_ALARM:
         alarm |= AlarmStatusType.DER_FAULT_UNDER_VOLTAGE
     if rack_flag & RackFlagBits.CELL_OT_ALARM:
-        alarm |= AlarmStatusType.DER_FAULT_OVER_TEMP
+        alarm |= AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL  # Temp -> Emergency local
     if rack_flag & RackFlagBits.CELL_UT_ALARM:
-        alarm |= AlarmStatusType.DER_FAULT_UNDER_TEMP
+        alarm |= AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL  # Temp -> Emergency local
     if rack_flag & RackFlagBits.CHG_OC_ALARM:
         alarm |= AlarmStatusType.DER_FAULT_OVER_CURRENT
     if rack_flag & RackFlagBits.DSC_OC_ALARM:
@@ -88,31 +95,31 @@ def modbus_error_to_alarm_status(
     
     # === Map CUBE RackFlagBits (7020) - High Byte (Protection triggered) ===
     if rack_flag & RackFlagBits.CELL_OV_PROT:
-        alarm |= AlarmStatusType.DER_FAULT_OVER_VOLTAGE | AlarmStatusType.DER_FAULT_INTERNAL_FAULT
+        alarm |= AlarmStatusType.DER_FAULT_OVER_VOLTAGE | AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL
     if rack_flag & RackFlagBits.CELL_UV_PROT:
-        alarm |= AlarmStatusType.DER_FAULT_UNDER_VOLTAGE | AlarmStatusType.DER_FAULT_INTERNAL_FAULT
+        alarm |= AlarmStatusType.DER_FAULT_UNDER_VOLTAGE | AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL
     if rack_flag & RackFlagBits.CELL_OT_PROT:
-        alarm |= AlarmStatusType.DER_FAULT_OVER_TEMP | AlarmStatusType.DER_FAULT_INTERNAL_FAULT
+        alarm |= AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL
     if rack_flag & RackFlagBits.CELL_UT_PROT:
-        alarm |= AlarmStatusType.DER_FAULT_UNDER_TEMP | AlarmStatusType.DER_FAULT_INTERNAL_FAULT
+        alarm |= AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL
     if rack_flag & RackFlagBits.CHG_OC_PROT:
-        alarm |= AlarmStatusType.DER_FAULT_OVER_CURRENT | AlarmStatusType.DER_FAULT_STORAGE_CHARGE_MAX
+        alarm |= AlarmStatusType.DER_FAULT_OVER_CURRENT | AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL
     if rack_flag & RackFlagBits.DSC_OC_PROT:
-        alarm |= AlarmStatusType.DER_FAULT_OVER_CURRENT | AlarmStatusType.DER_FAULT_STORAGE_CHARGE_MIN
+        alarm |= AlarmStatusType.DER_FAULT_OVER_CURRENT | AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL
     
     # === Map CUBE LECUFlagBits (7019) ===
     if lecu_flag & LECUFlagBits.COMM_ERROR:
-        alarm |= AlarmStatusType.DER_FAULT_COMM_ERROR
+        alarm |= AlarmStatusType.DER_FAULT_EMERGENCY_REMOTE  # Comm -> Remote emergency
     if lecu_flag & LECUFlagBits.HARDWARE_ERROR:
-        alarm |= AlarmStatusType.DER_FAULT_INTERNAL_FAULT
+        alarm |= AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL
     if lecu_flag & LECUFlagBits.AFE_ERROR:
-        alarm |= AlarmStatusType.DER_FAULT_INTERNAL_FAULT
+        alarm |= AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL
     if lecu_flag & LECUFlagBits.MEASURE_ERROR:
-        alarm |= AlarmStatusType.DER_FAULT_INTERNAL_FAULT
+        alarm |= AlarmStatusType.DER_FAULT_LOW_POWER_INPUT  # Measurement -> Low power input
     if lecu_flag & LECUFlagBits.BALANCE_ERROR:
-        alarm |= AlarmStatusType.DER_FAULT_BALANCE_ERROR
+        alarm |= AlarmStatusType.DER_FAULT_CURRENT_IMBALANCE
     if lecu_flag & LECUFlagBits.EEPROM_ERROR:
-        alarm |= AlarmStatusType.DER_FAULT_INTERNAL_FAULT
+        alarm |= AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL
     
     return alarm
 
@@ -199,7 +206,7 @@ class DERStatusAdapter:
         return DERStatus(
             href=href,
             readingTime=ts,
-            alarmStatus=AlarmStatusValue(dateTime=ts, value=f"{alarm_status:08X}") if alarm_status != 0 else None,
+            alarmStatus=f"{alarm_status:08X}",  # Always send, even when 00000000
             genConnectStatus=ConnectStatusValue(dateTime=ts, value=f"{int(connect_status):02X}"),
             operationalModeStatus=OperationalModeStatusValue(dateTime=ts, value=f"{int(op_mode):02X}"),
             stateOfChargeStatus=self._to_soc(snapshot.average_soc),

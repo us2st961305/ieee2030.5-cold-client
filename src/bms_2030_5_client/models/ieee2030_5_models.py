@@ -201,11 +201,11 @@ class DERStatus:
     
     alarmStatus: Indicates current alarms/fault conditions as xs:hexBinary.
                  Maps from BMS error status registers to IEEE 2030.5 format.
-                 Format: AlarmStatusValue with dateTime and 8-character hex string value.
+                 Format: 8-character hex string (e.g., "00000001").
     """
     href: Optional[str] = None
     readingTime: int = 0  # Timestamp of the reading
-    alarmStatus: Optional[AlarmStatusValue] = None  # Alarm status with timestamp
+    alarmStatus: Optional[str] = None  # Alarm status as hex binary string
     genConnectStatus: Optional[ConnectStatusValue] = None
     inverterStatus: Optional[InverterStatusValue] = None
     operationalModeStatus: Optional[OperationalModeStatusValue] = None
@@ -731,3 +731,43 @@ class MirrorUsagePointList:
     results: int = 0
     pollRate: int = 900
     MirrorUsagePoint: List[MirrorUsagePoint] = field(default_factory=list)
+
+
+# =============================================================================
+# LogEvent Models
+# =============================================================================
+
+@dataclass_json
+@dataclass
+class LogEvent:
+    """
+    IEEE 2030.5 LogEvent resource.
+    
+    Used to report alarms and status changes to the server.
+    Reference: IEEE Std 2030.5-2023
+    """
+    # Required fields
+    createdDateTime: int = 0           # Unix timestamp when event occurred
+    functionSet: int = 11              # 11 = DER function set
+    logEventCode: int = 0              # Event code (maps to alarm type)
+    logEventID: int = 0                # Unique event ID
+    logEventPEN: int = 0               # 0 = IEEE defined codes
+    profileID: int = 2                 # 2 = IEEE 2030.5 profile
+    
+    # Optional fields
+    details: Optional[str] = None      # Human-readable description
+    extendedData: Optional[int] = None # Extended data (if needed)
+    href: Optional[str] = None         # Resource href (set by server)
+
+
+@dataclass_json
+@dataclass
+class LogEventList:
+    """
+    List of LogEvent resources.
+    """
+    href: Optional[str] = None
+    all: int = 0
+    results: int = 0
+    pollRate: int = 900
+    LogEvent: List[LogEvent] = field(default_factory=list)

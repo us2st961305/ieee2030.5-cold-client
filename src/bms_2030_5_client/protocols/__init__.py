@@ -51,6 +51,10 @@ from .ieee2030_5_protocol import (
     sep_value_to_watts,
     soc_to_sep_value,
     sep_value_to_soc,
+    # LogEvent definitions
+    FunctionSetIdentifier,
+    LogEventCode,
+    LOG_EVENT_CODE_DESCRIPTIONS,
 )
 
 __all__ = [
@@ -97,4 +101,8 @@ __all__ = [
     "sep_value_to_watts",
     "soc_to_sep_value",
     "sep_value_to_soc",
+    # LogEvent definitions
+    "FunctionSetIdentifier",
+    "LogEventCode",
+    "LOG_EVENT_CODE_DESCRIPTIONS",
 ]

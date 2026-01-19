@@ -215,32 +215,22 @@ class AlarmStatusType(IntFlag):
     
     Reference: IEEE Std 2030.5-2023, AlarmStatusType
     Used in DERStatus.alarmStatus field.
+    
+    Bits 11-31 are reserved per IEEE 2030.5 specification.
     """
-    # Bit 0: DER Fault/Condition
-    DER_FAULT_OVER_CURRENT = 0x00000001          # Bit 0: Over current
-    DER_FAULT_OVER_VOLTAGE = 0x00000002          # Bit 1: Over voltage
-    DER_FAULT_UNDER_VOLTAGE = 0x00000004         # Bit 2: Under voltage
-    DER_FAULT_OVER_FREQUENCY = 0x00000008        # Bit 3: Over frequency
-    DER_FAULT_UNDER_FREQUENCY = 0x00000010       # Bit 4: Under frequency
-    DER_FAULT_VOLTAGE_IMBALANCE = 0x00000020     # Bit 5: Voltage imbalance
-    DER_FAULT_CURRENT_IMBALANCE = 0x00000040     # Bit 6: Current imbalance
-    DER_FAULT_EMERGENCY_LOCAL = 0x00000080       # Bit 7: Emergency local
-    DER_FAULT_EMERGENCY_REMOTE = 0x00000100      # Bit 8: Emergency remote
-    DER_FAULT_LOW_POWER_INPUT = 0x00000200       # Bit 9: Low power input
-    DER_FAULT_PHASE_ROTATION = 0x00000400        # Bit 10: Phase rotation
-    # Storage-specific alarms (Battery)
-    DER_FAULT_OVER_TEMP = 0x00000800             # Bit 11: Over temperature
-    DER_FAULT_UNDER_TEMP = 0x00001000            # Bit 12: Under temperature
-    DER_FAULT_STORAGE_CHARGE_MAX = 0x00002000    # Bit 13: Storage charge max
-    DER_FAULT_STORAGE_CHARGE_MIN = 0x00004000    # Bit 14: Storage charge min
-    DER_FAULT_INTERNAL_FAULT = 0x00008000        # Bit 15: Internal fault
-    DER_FAULT_COMM_ERROR = 0x00010000            # Bit 16: Communication error
-    DER_FAULT_BALANCE_ERROR = 0x00020000         # Bit 17: Balance error
-    DER_FAULT_RELAY_STUCK = 0x00040000           # Bit 18: Relay stuck
-    DER_FAULT_PF_PROTECTION = 0x00080000         # Bit 19: Permanent fault protection
-    # Alarm levels
-    DER_FAULT_LEVEL2_ALARM = 0x00100000          # Bit 20: Level 2 alarm
-    DER_FAULT_LEVEL3_ALARM = 0x00200000          # Bit 21: Level 3 alarm (severe)
+    # Standard DER Fault/Condition flags (Bits 0-10)
+    DER_FAULT_OVER_CURRENT = 0x00000001          # Bit 0: 過電流故障
+    DER_FAULT_OVER_VOLTAGE = 0x00000002          # Bit 1: 過電壓故障
+    DER_FAULT_UNDER_VOLTAGE = 0x00000004         # Bit 2: 欠壓故障
+    DER_FAULT_OVER_FREQUENCY = 0x00000008        # Bit 3: 過頻率故障
+    DER_FAULT_UNDER_FREQUENCY = 0x00000010       # Bit 4: 欠頻率故障
+    DER_FAULT_VOLTAGE_IMBALANCE = 0x00000020     # Bit 5: 電壓不平衡故障
+    DER_FAULT_CURRENT_IMBALANCE = 0x00000040     # Bit 6: 電流不平衡故障
+    DER_FAULT_EMERGENCY_LOCAL = 0x00000080       # Bit 7: 在地緊急故障
+    DER_FAULT_EMERGENCY_REMOTE = 0x00000100      # Bit 8: 遠端緊急故障
+    DER_FAULT_LOW_POWER_INPUT = 0x00000200       # Bit 9: 低功率輸入故障
+    DER_FAULT_PHASE_ROTATION = 0x00000400        # Bit 10: 相序旋轉故障
+    # Bits 11-31: Reserved (保留位元)
 
 
 # =============================================================================
@@ -554,3 +544,71 @@ def sep_value_to_soc(sep_value: int) -> float:
         SOC as percentage (0.00 - 100.00)
     """
     return sep_value / 100.0
+
+
+# =============================================================================
+# LogEvent Definitions (IEEE Std 2030.5-2023)
+# =============================================================================
+
+class FunctionSetIdentifier(IntEnum):
+    """
+    Function Set identifiers for LogEvent.
+    
+    Reference: IEEE Std 2030.5-2023, Table 27
+    """
+    GENERAL = 0               # General / unspecified
+    TIME = 1                  # Time function set
+    DEVICE_INFORMATION = 2    # Device Information
+    DEVICE_CAPABILITY = 3     # Device Capability
+    END_DEVICE = 4            # End Device
+    SELF_DEVICE = 5           # Self Device
+    FLOW_RESERVATION = 6      # Flow Reservation
+    METERING = 7              # Metering
+    MESSAGING = 8             # Messaging
+    PRICING = 9               # Pricing
+    DEMAND_RESPONSE = 10      # Demand Response / Load Control
+    DER = 11                  # Distributed Energy Resources
+    PREPAYMENT = 12           # Prepayment
+    LOG_EVENT = 13            # Log Event (recursive)
+    CONFIGURATION = 14        # Configuration
+    SECURITY = 15             # Security
+
+
+class LogEventCode(IntEnum):
+    """
+    Log event codes for DER alarms (Function Set = 11).
+    
+    Maps directly to AlarmStatusType bit positions.
+    Reference: IEEE Std 2030.5-2023, LogEventCode for DER
+    """
+    # DER Fault codes (matching alarmStatus bit positions)
+    DER_FAULT_OVER_CURRENT = 0       # Bit 0: 過電流故障
+    DER_FAULT_OVER_VOLTAGE = 1       # Bit 1: 過電壓故障
+    DER_FAULT_UNDER_VOLTAGE = 2      # Bit 2: 欠壓故障
+    DER_FAULT_OVER_FREQUENCY = 3     # Bit 3: 過頻率故障
+    DER_FAULT_UNDER_FREQUENCY = 4    # Bit 4: 欠頻率故障
+    DER_FAULT_VOLTAGE_IMBALANCE = 5  # Bit 5: 電壓不平衡故障
+    DER_FAULT_CURRENT_IMBALANCE = 6  # Bit 6: 電流不平衡故障
+    DER_FAULT_EMERGENCY_LOCAL = 7    # Bit 7: 在地緊急故障
+    DER_FAULT_EMERGENCY_REMOTE = 8   # Bit 8: 遠端緊急故障
+    DER_FAULT_LOW_POWER_INPUT = 9    # Bit 9: 低功率輸入故障
+    DER_FAULT_PHASE_ROTATION = 10    # Bit 10: 相序旋轉故障
+    # Cleared events (use 128+ to indicate alarm cleared)
+    DER_FAULT_CLEARED = 128          # Generic fault cleared
+
+
+# LogEvent code descriptions for logging
+LOG_EVENT_CODE_DESCRIPTIONS: Dict[int, str] = {
+    LogEventCode.DER_FAULT_OVER_CURRENT: "Over current fault detected",
+    LogEventCode.DER_FAULT_OVER_VOLTAGE: "Over voltage fault detected",
+    LogEventCode.DER_FAULT_UNDER_VOLTAGE: "Under voltage fault detected",
+    LogEventCode.DER_FAULT_OVER_FREQUENCY: "Over frequency fault detected",
+    LogEventCode.DER_FAULT_UNDER_FREQUENCY: "Under frequency fault detected",
+    LogEventCode.DER_FAULT_VOLTAGE_IMBALANCE: "Voltage imbalance fault detected",
+    LogEventCode.DER_FAULT_CURRENT_IMBALANCE: "Current imbalance fault detected",
+    LogEventCode.DER_FAULT_EMERGENCY_LOCAL: "Local emergency fault detected",
+    LogEventCode.DER_FAULT_EMERGENCY_REMOTE: "Remote emergency fault detected",
+    LogEventCode.DER_FAULT_LOW_POWER_INPUT: "Low power input fault detected",
+    LogEventCode.DER_FAULT_PHASE_ROTATION: "Phase rotation fault detected",
+    LogEventCode.DER_FAULT_CLEARED: "Fault cleared",
+}
