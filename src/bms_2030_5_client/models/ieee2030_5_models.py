@@ -122,6 +122,14 @@ class StorageModeStatusValue:
 
 @dataclass_json
 @dataclass
+class AlarmStatusValue:
+    """Alarm status with timestamp. Value is 8-character hex binary string (32-bit flags)."""
+    dateTime: int = 0
+    value: str = "00000000"
+
+
+@dataclass_json
+@dataclass
 class StateOfCharge:
     """State of charge percentage with timestamp."""
     dateTime: int = 0  # Unix timestamp
@@ -188,9 +196,16 @@ class DERStatus:
     DER device status.
     
     Current operational status of the DER.
+    
+    Reference: IEEE Std 2030.5-2023, DERStatus resource.
+    
+    alarmStatus: Indicates current alarms/fault conditions as xs:hexBinary.
+                 Maps from BMS error status registers to IEEE 2030.5 format.
+                 Format: AlarmStatusValue with dateTime and 8-character hex string value.
     """
     href: Optional[str] = None
     readingTime: int = 0  # Timestamp of the reading
+    alarmStatus: Optional[AlarmStatusValue] = None  # Alarm status with timestamp
     genConnectStatus: Optional[ConnectStatusValue] = None
     inverterStatus: Optional[InverterStatusValue] = None
     operationalModeStatus: Optional[OperationalModeStatusValue] = None

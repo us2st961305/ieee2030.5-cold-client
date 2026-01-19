@@ -209,6 +209,40 @@ class StorageModeStatusType(IntEnum):
     TESTING = 4
 
 
+class AlarmStatusType(IntFlag):
+    """
+    DER alarm status flags.
+    
+    Reference: IEEE Std 2030.5-2023, AlarmStatusType
+    Used in DERStatus.alarmStatus field.
+    """
+    # Bit 0: DER Fault/Condition
+    DER_FAULT_OVER_CURRENT = 0x00000001          # Bit 0: Over current
+    DER_FAULT_OVER_VOLTAGE = 0x00000002          # Bit 1: Over voltage
+    DER_FAULT_UNDER_VOLTAGE = 0x00000004         # Bit 2: Under voltage
+    DER_FAULT_OVER_FREQUENCY = 0x00000008        # Bit 3: Over frequency
+    DER_FAULT_UNDER_FREQUENCY = 0x00000010       # Bit 4: Under frequency
+    DER_FAULT_VOLTAGE_IMBALANCE = 0x00000020     # Bit 5: Voltage imbalance
+    DER_FAULT_CURRENT_IMBALANCE = 0x00000040     # Bit 6: Current imbalance
+    DER_FAULT_EMERGENCY_LOCAL = 0x00000080       # Bit 7: Emergency local
+    DER_FAULT_EMERGENCY_REMOTE = 0x00000100      # Bit 8: Emergency remote
+    DER_FAULT_LOW_POWER_INPUT = 0x00000200       # Bit 9: Low power input
+    DER_FAULT_PHASE_ROTATION = 0x00000400        # Bit 10: Phase rotation
+    # Storage-specific alarms (Battery)
+    DER_FAULT_OVER_TEMP = 0x00000800             # Bit 11: Over temperature
+    DER_FAULT_UNDER_TEMP = 0x00001000            # Bit 12: Under temperature
+    DER_FAULT_STORAGE_CHARGE_MAX = 0x00002000    # Bit 13: Storage charge max
+    DER_FAULT_STORAGE_CHARGE_MIN = 0x00004000    # Bit 14: Storage charge min
+    DER_FAULT_INTERNAL_FAULT = 0x00008000        # Bit 15: Internal fault
+    DER_FAULT_COMM_ERROR = 0x00010000            # Bit 16: Communication error
+    DER_FAULT_BALANCE_ERROR = 0x00020000         # Bit 17: Balance error
+    DER_FAULT_RELAY_STUCK = 0x00040000           # Bit 18: Relay stuck
+    DER_FAULT_PF_PROTECTION = 0x00080000         # Bit 19: Permanent fault protection
+    # Alarm levels
+    DER_FAULT_LEVEL2_ALARM = 0x00100000          # Bit 20: Level 2 alarm
+    DER_FAULT_LEVEL3_ALARM = 0x00200000          # Bit 21: Level 3 alarm (severe)
+
+
 # =============================================================================
 # DER Control Modes (IEEE Std 1547-2018 via IEEE 2030.5)
 # =============================================================================

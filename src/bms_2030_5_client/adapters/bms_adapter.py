@@ -30,13 +30,14 @@ from bms_2030_5_client.models import (
     OperationalModeStatusType,
     ConnectStatusValue,
     OperationalModeStatusValue,
+    AlarmStatusValue,
     # Metering models
     MirrorUsagePoint,
     MirrorMeterReading,
 )
 
 # Import specialized adapters
-from bms_2030_5_client.ders import DERStatusAdapter
+from bms_2030_5_client.ders import DERStatusAdapter, modbus_error_to_alarm_status
 from bms_2030_5_client.dera import DERAvailabilityAdapter
 from bms_2030_5_client.mup import MirrorUsagePointAdapter
 
@@ -221,7 +222,7 @@ class BMSAdapter:
             href: Optional href
             
         Returns:
-            DERStatus for the rack
+            DERStatus for the rack with alarmStatus from Modbus data
         """
         # Connection status
         connect_status = ConnectStatusType.CONNECTED
@@ -240,11 +241,19 @@ class BMSAdapter:
         else:
             op_mode = OperationalModeStatusType.OFF
 
+        # Convert Modbus alarm status to IEEE 2030.5 format
+        alarm_status = modbus_error_to_alarm_status(
+            error_status=rack.alarm_status,
+            rack_flag=0,  # Can be populated if CUBE 7020 register data is available
+            lecu_flag=0,  # Can be populated if CUBE 7019 register data is available
+        )
+
         ts = int(rack.timestamp.timestamp())
 
         return DERStatus(
             href=href,
             readingTime=ts,
+            alarmStatus=AlarmStatusValue(dateTime=ts, value=f"{alarm_status:08X}") if alarm_status != 0 else None,
             genConnectStatus=ConnectStatusValue(dateTime=ts, value=f"{int(connect_status):02X}"),
             operationalModeStatus=OperationalModeStatusValue(dateTime=ts, value=f"{int(op_mode):02X}"),
             stateOfChargeStatus=self._to_soc(rack.soc),

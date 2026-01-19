@@ -29,6 +29,7 @@ from bms_2030_5_client.models.ieee2030_5_models import (
     OperationalModeStatusValue,
     InverterStatusValue,
     StorageModeStatusValue,
+    AlarmStatusValue,
     Temperature,
     EndDevice,
     EndDeviceList,
