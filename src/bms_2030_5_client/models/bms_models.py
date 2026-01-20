@@ -38,31 +38,31 @@ class CellInfo:
 @dataclass
 class RackData:
     """
-    Single rack data from Modbus registers 7000-7029.
+    Single rack data from Modbus registers.
+    
+    IMPORTANT: Actual Modbus addresses are doc addresses - 1.
+    Doc 7000 series -> Actual 6999 series
     
     Register mapping (offset 30 per rack):
-    - 7000: rack_vol (U16, 0.1V)
-    - 7001: rack_current (S16, 0.1A)
-    - 7002: SOC (U16, 0.1%)
-    - 7003: cell_max_v (U16, 0.001V)
-    - 7004: cell_min_v (U16, 0.001V)
-    - 7005: cell_max_t (S16, 1°C)
-    - 7006: cell_min_t (S16, 1°C)
-    - 7007: tag_max_v (U16, enum)
-    - 7008: tag_min_v (U16, enum)
-    - 7009: tag_max_t (U16, enum)
-    - 7010: tag_min_t (U16, enum)
-    - 7011: RM (U16, 0.01AH)
-    - 7012: FCC (U16, 0.01AH)
-    - 7013: rack_power (S32, 0.1W) [7013-7014]
-    - 7015: cycle_count (U16)
-    - 7016: rack_status (U16)
-    - 7017: alarm_status (U16)
-    - 7018: soh (U16, 0.1%)
-    - 7019: max_charge_current (U16, 0.1A)
-    - 7020: max_discharge_current (U16, 0.1A)
-    - 7021: max_charge_voltage (U16, 0.1V)
-    - 7022: min_discharge_voltage (U16, 0.1V)
+    Doc -> Actual (index in registers list)
+    - 7000 -> 6999 [0]: rack_vol (U16, 0.1V)
+    - 7001 -> 7000 [1]: rack_current (S16, 0.1A)
+    - 7002 -> 7001 [2]: SOC (U16, 0.1%)
+    - 7003 -> 7002 [3]: cell_max_v (U16, 0.001V)
+    - 7004 -> 7003 [4]: cell_min_v (U16, 0.001V)
+    - 7005 -> 7004 [5]: cell_max_t (S16, 1°C)
+    - 7006 -> 7005 [6]: cell_min_t (S16, 1°C)
+    - 7007 -> 7006 [7]: tag_max_v (U16, enum)
+    - 7008 -> 7007 [8]: tag_min_v (U16, enum)
+    - 7009 -> 7008 [9]: tag_max_t (U16, enum)
+    - 7010 -> 7009 [10]: tag_min_t (U16, enum)
+    - 7011 -> 7010 [11]: RM (U16, 0.01AH)
+    - 7012 -> 7011 [12]: FCC (U16, 0.01AH)
+    - 7019 -> 7018 [19]: lecu_flag (U16, bitfield)
+    - 7020 -> 7019 [20]: rack_flag (U16, bitfield)
+    - 7022 -> 7021 [22]: SOH (U16, 1%)
+    - 7025 -> 7024 [25]: relay_sw (U16, 0/1)
+    - 7026 -> 7025 [26]: PF_release (U16, 0/1)
     """
     rack_id: int
     voltage: float  # V
@@ -164,26 +164,30 @@ class RackData:
 @dataclass
 class SystemData:
     """
-    System-level BMS data from registers 4000-4099.
+    System-level BMS data from registers.
+    
+    IMPORTANT: Actual Modbus addresses are doc addresses - 1.
+    Doc 4000 series -> Actual 3999 series
     
     Register mapping (CUBE 電池組暫存器通訊表 V1.0.3):
-    - 4000: Vol_avg (U16, 0.1V) - Average voltage
-    - 4001: total_curr (S16, 0.1A) - Total current
-    - 4002: total_power (S16, 0.1kW) - Total power
-    - 4003: deliy_CHG (U16, 0.1kWh) - Daily charge energy
-    - 4004: deliy_DSC (U16, 0.1kWh) - Daily discharge energy
-    - 4005: SOC_avg (U16, 0.1%) - Average SOC
-    - 4006: RM_total (U16, AH) - Total remaining capacity
-    - 4007: FCC_total (U16, AH) - Total full charge capacity
-    - 4008: online_NO (U16) - Online rack count
-    - 4009: allow_power (U16, 0.1kW) - Allowed power
-    - 4010: Right_State (U16, bitfield) - Rack 1-12 state
-    - 4011: Left_State (U16, bitfield) - Rack 13-24 state
-    - 4012: SYS_state (U16, 0/1) - System state
-    - 4016: all_max_t (S16, 1°C) - Maximum temperature
-    - 4017: all_min_t (S16, 1°C) - Minimum temperature
-    - 4042: allow_power_DSC (U16, 0.1kW) - Allowed discharge power
-    - 4043: allow_power_CHG (U16, 0.1kW) - Allowed charge power
+    Doc -> Actual (index in registers list)
+    - 4000 -> 3999 [0]: Vol_avg (U16, 0.1V) - Average voltage
+    - 4001 -> 4000 [1]: total_curr (S16, 0.1A) - Total current
+    - 4002 -> 4001 [2]: total_power (S16, 0.1kW) - Total power
+    - 4003 -> 4002 [3]: deliy_CHG (U16, 0.1kWh) - Daily charge energy
+    - 4004 -> 4003 [4]: deliy_DSC (U16, 0.1kWh) - Daily discharge energy
+    - 4005 -> 4004 [5]: SOC_avg (U16, 0.1%) - Average SOC
+    - 4006 -> 4005 [6]: RM_total (U16, AH) - Total remaining capacity
+    - 4007 -> 4006 [7]: FCC_total (U16, AH) - Total full charge capacity
+    - 4008 -> 4007 [8]: online_NO (U16) - Online rack count
+    - 4009 -> 4008 [9]: allow_power (U16, 0.1kW) - Allowed power
+    - 4010 -> 4009 [10]: Right_State (U16, bitfield) - Rack 1-12 state
+    - 4011 -> 4010 [11]: Left_State (U16, bitfield) - Rack 13-24 state
+    - 4012 -> 4011 [12]: SYS_state (U16, 0/1) - System state
+    - 4016 -> 4015 [16]: all_max_t (S16, 1°C) - Maximum temperature
+    - 4017 -> 4016 [17]: all_min_t (S16, 1°C) - Minimum temperature
+    - 4042 -> 4041 [42]: allow_power_DSC (U16, 0.1kW) - Allowed discharge power
+    - 4043 -> 4042 [43]: allow_power_CHG (U16, 0.1kW) - Allowed charge power
     """
     system_status: int = 0
     total_voltage: float = 0.0  # V (from 4000: Vol_avg)

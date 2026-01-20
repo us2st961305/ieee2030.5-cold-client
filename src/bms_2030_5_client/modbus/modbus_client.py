@@ -34,14 +34,15 @@ class ModbusBMSClient:
     - Maximum 24 racks (0-23)
     """
 
-    # Register addresses
-    SYSTEM_BASE_ADDR = 4000
-    RACK_BASE_ADDR = 7000
+    # Register addresses (actual Modbus addresses, doc addresses - 1)
+    # Documentation uses 1-based numbering, actual Modbus is 0-based offset
+    SYSTEM_BASE_ADDR = 3999      # Doc: 4000, Actual: 3999
+    RACK_BASE_ADDR = 6999        # Doc: 7000, Actual: 6999
     RACK_REGISTER_OFFSET = 30
     MAX_RACKS = 24
 
     # Number of registers to read
-    SYSTEM_REGISTER_COUNT = 44  # Read 4000-4043 for allowed_power_DSC/CHG
+    SYSTEM_REGISTER_COUNT = 44   # Read 3999-4042 (Doc: 4000-4043) for allowed_power_DSC/CHG
     RACK_REGISTER_COUNT = 30
 
     def __init__(

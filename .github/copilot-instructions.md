@@ -82,20 +82,48 @@ Reference: IEEE Std 2030.5™-2023
 ## CUBE Modbus TCP/IP (V1.0.3)
 
 - **Port:** 502
-- **7000 Series:** Rack-level data (30 registers per rack)
-- **4000 Series:** System-level data
+- **Address Offset:** Documentation addresses need **-1** for actual Modbus communication
+- **7000 Series:** Rack-level data (30 registers per rack) → Actual: 6999 series
+- **4000 Series:** System/Container-level data → Actual: 3999 series
 
-### Rack Registers (7000 series)
-| Base | Name | Unit |
-|------|------|------|
-| 7000 | Rack Voltage | 0.1V |
-| 7001 | Rack Current | 0.1A |
-| 7002 | SOC | 0.1% |
-| 7019 | LECU Flag | bit |
-| 7020 | Rack Flag | bit |
-| 7025 | Relay Switch | 0/1 |
+### System Registers (4000 series in doc → 3999 series actual)
+| Doc Addr | Actual | Name | Unit |
+|----------|--------|------|------|
+| 4000 | 3999 | Vol_avg | 0.1V |
+| 4001 | 4000 | total_curr | 0.1A (S16) |
+| 4002 | 4001 | total_power | 0.1kW (S16) |
+| 4003 | 4002 | deliy_CHG | 0.1kWh |
+| 4004 | 4003 | deliy_DSC | 0.1kWh |
+| 4005 | 4004 | SOC_avg | 0.1% |
+| 4006 | 4005 | RM_total | AH |
+| 4007 | 4006 | FCC_total | AH |
+| 4008 | 4007 | online_NO | N.A. |
+| 4009 | 4008 | allow_power | 0.1kW |
+| 4016 | 4015 | all_max_t | 1°C (S16) |
+| 4017 | 4016 | all_min_t | 1°C (S16) |
+| 4042 | 4041 | allow_power_DSC | 0.1kW |
+| 4043 | 4042 | allow_power_CHG | 0.1kW |
+
+### Rack Registers (7000 series in doc → 6999 series actual)
+| Doc Addr | Actual | Name | Unit |
+|----------|--------|------|------|
+| 7000 | 6999 | rack_vol | 0.1V |
+| 7001 | 7000 | rack_current | 0.1A (S16) |
+| 7002 | 7001 | SOC | 0.1% |
+| 7003 | 7002 | cell_max_v | 0.001V |
+| 7004 | 7003 | cell_min_v | 0.001V |
+| 7005 | 7004 | cell_max_t | 1°C (S16) |
+| 7006 | 7005 | cell_min_t | 1°C (S16) |
+| 7011 | 7010 | RM | 0.01AH |
+| 7012 | 7011 | FCC | 0.01AH |
+| 7019 | 7018 | lecu_flag | bitfield |
+| 7020 | 7019 | rack_flag | bitfield |
+| 7022 | 7021 | SOH | 1% |
+| 7025 | 7024 | relay_sw | 0/1 |
+| 7026 | 7025 | PF_release | 0/1 |
 
 **Rack N address = Base + 30 × (N-1)**
+- Rack 1: 6999 (actual), 7029 (actual for Rack 2), etc.
 
 ---
 
@@ -112,6 +140,11 @@ Reference: IEEE Std 2030.5™-2023
 
 ## Data Conversion Rules
 
+### Address Offset
+- **CUBE Modbus:** Doc address - 1 = Actual Modbus address
+  - Doc 4000 → Actual 3999
+  - Doc 7000 → Actual 6999
+
 ### Voltage
 - Total voltage: `raw × 0.1` (V)
 - Cell voltage: `raw × 0.001` (V)
@@ -124,7 +157,8 @@ Reference: IEEE Std 2030.5™-2023
 
 ### Capacity
 - RS-485: `raw × 0.01` (AH)
-- CUBE: `raw × 0.1` (AH)
+- CUBE Rack (RM/FCC): `raw × 0.01` (AH)
+- CUBE System (RM_total/FCC_total): `raw` (AH, no scaling)
 
 ### SOC
 - BMS: `raw × 0.1` (%)
@@ -158,6 +192,8 @@ Reference: IEEE Std 2030.5™-2023
 from bms_2030_5_client.protocols import (
     RS485_REGISTERS,
     CUBE_RACK_REGISTERS,
+    CUBE_SYSTEM_REGISTERS,
+    CUBE_ADDRESS_OFFSET,
     CAN_READ_COMMANDS,
     ErrorStatusBits,
 )
@@ -165,11 +201,15 @@ from bms_2030_5_client.protocols import (
 # Convert raw voltage
 voltage = RS485_REGISTERS.convert_voltage(raw_value)
 
-# Get rack 3 register address
+# Get rack 3 register address (uses actual Modbus addresses)
+# Base is 6999 (doc 7000), offset is 30 per rack
 addr = CUBE_RACK_REGISTERS.get_rack_address(
-    CUBE_RACK_REGISTERS.SOC, 
+    CUBE_RACK_REGISTERS.RACK_VOLTAGE,  # 6999
     rack_number=3
-)
+)  # Returns 7059 (6999 + 30*2)
+
+# Convert documentation address to actual
+actual_addr = CUBE_SYSTEM_REGISTERS.doc_to_actual(4005)  # Returns 4004
 
 # Check error flags
 if status & ErrorStatusBits.VOLTAGE_ALARM:

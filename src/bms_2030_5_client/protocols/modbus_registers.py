@@ -161,47 +161,55 @@ class RS485_BALANCE_REGISTERS:
 # CUBE Modbus TCP/IP Register Definitions (V1.0.3)
 # =============================================================================
 
+# NOTE: CUBE documentation uses 1-based register numbering.
+# Actual Modbus protocol addresses are offset by -1.
+# Document address 7000 -> Actual address 6999
+# Document address 4000 -> Actual address 3999
+CUBE_ADDRESS_OFFSET: Final[int] = -1
+
+
 class CUBE_RACK_REGISTERS:
     """
-    CUBE Modbus TCP Rack-Level Registers (7000 series).
+    CUBE Modbus TCP Rack-Level Registers (7000 series in documentation).
     
     Reference: CUBE 電池組暫存器通訊表 V1.0.3
+    
+    IMPORTANT: Addresses here are the ACTUAL Modbus addresses to use.
+    Documentation addresses need -1 offset for actual communication.
+    (Doc 7000 -> Actual 6999)
+    
     Each rack has 30 registers, offset by RACK_OFFSET * (rack_number - 1)
     """
     
-    # Base addresses (Rack 1)
-    RACK_VOLTAGE: Final[int] = 7000          # RO, U16, 0.1V
-    RACK_CURRENT: Final[int] = 7001          # RO, S16, 0.1A
-    SOC: Final[int] = 7002                   # RO, U16, 0.1%
-    CELL_MAX_V: Final[int] = 7003            # RO, U16, 0.001V
-    CELL_MIN_V: Final[int] = 7004            # RO, U16, 0.001V
-    CELL_MAX_T: Final[int] = 7005            # RO, S16, 1°C
-    CELL_MIN_T: Final[int] = 7006            # RO, S16, 1°C
-    CELL_MAX_V_POS: Final[int] = 7007        # RO, U16, 最高電壓Cell位置
-    CELL_MIN_V_POS: Final[int] = 7008        # RO, U16, 最低電壓Cell位置
-    CELL_MAX_T_POS: Final[int] = 7009        # RO, U16, 最高溫度位置
-    CELL_MIN_T_POS: Final[int] = 7010        # RO, U16, 最低溫度位置
-    CHARGE_V_LIMIT: Final[int] = 7011        # RO, U16, 0.1V, 建議充電電壓
-    DISCHARGE_V_LIMIT: Final[int] = 7012     # RO, U16, 0.1V, 建議放電電壓
-    CHARGE_I_LIMIT: Final[int] = 7013        # RO, U16, 0.1A, 建議充電電流
-    DISCHARGE_I_LIMIT: Final[int] = 7014     # RO, U16, 0.1A, 建議放電電流
-    LECU_HEART_BEAT: Final[int] = 7015       # RO, U16, LECU心跳
-    RACK_HEART_BEAT: Final[int] = 7016       # RO, U16, Rack心跳
-    # 7017-7018: Reserved
-    LECU_FLAG: Final[int] = 7019             # RO, U16, LECU告警旗標 (see LECUFlagBits)
-    RACK_FLAG: Final[int] = 7020             # RO, U16, Rack告警旗標 (see RackFlagBits)
-    # 7021: Reserved
-    SOH: Final[int] = 7022                   # RO, U16, 1%
-    RM: Final[int] = 7023                    # RO, U16, 0.1AH, 殘留電量
-    FCC: Final[int] = 7024                   # RO, U16, 0.1AH, 滿充電量
-    RELAY_SW: Final[int] = 7025              # R/W, U16, 繼電器開關 (0=關, 1=開)
-    PF_RELEASE: Final[int] = 7026            # R/W, U16, 解除永久保護 (寫1解除)
-    BALANCE_STATUS: Final[int] = 7027        # RO, U16, 平衡狀態 (0=OFF, 1=ON)
-    DC: Final[int] = 7028                    # RO, U16, 0.1AH, 設計電量
-    CYCLE_COUNT: Final[int] = 7029           # RO, U16, 1, 循環次數
+    # Base addresses (Rack 1) - Actual Modbus addresses (doc address - 1)
+    RACK_VOLTAGE: Final[int] = 6999          # RO, U16, 0.1V (Doc: 7000)
+    RACK_CURRENT: Final[int] = 7000          # RO, S16, 0.1A (Doc: 7001)
+    SOC: Final[int] = 7001                   # RO, U16, 0.1% (Doc: 7002)
+    CELL_MAX_V: Final[int] = 7002            # RO, U16, 0.001V (Doc: 7003)
+    CELL_MIN_V: Final[int] = 7003            # RO, U16, 0.001V (Doc: 7004)
+    CELL_MAX_T: Final[int] = 7004            # RO, S16, 1°C (Doc: 7005)
+    CELL_MIN_T: Final[int] = 7005            # RO, S16, 1°C (Doc: 7006)
+    TAG_MAX_V: Final[int] = 7006             # RO, U16, enum (Doc: 7007)
+    TAG_MIN_V: Final[int] = 7007             # RO, U16, enum (Doc: 7008)
+    TAG_MAX_T: Final[int] = 7008             # RO, U16, enum (Doc: 7009)
+    TAG_MIN_T: Final[int] = 7009             # RO, U16, enum (Doc: 7010)
+    RM: Final[int] = 7010                    # RO, U16, 0.01AH, 殘留電量 (Doc: 7011)
+    FCC: Final[int] = 7011                   # RO, U16, 0.01AH, 滿充電量 (Doc: 7012)
+    # 7012-7017: Reserved (Doc: 7013-7018)
+    LECU_FLAG: Final[int] = 7018             # RO, U16, LECU告警旗標 (Doc: 7019)
+    RACK_FLAG: Final[int] = 7019             # RO, U16, Rack告警旗標 (Doc: 7020)
+    # 7020: Reserved (Doc: 7021)
+    SOH: Final[int] = 7021                   # RO, U16, 1% (Doc: 7022)
+    # 7022-7023: Reserved (Doc: 7023-7024)
+    RELAY_SW: Final[int] = 7024              # R/W, U16, 繼電器開關 (Doc: 7025)
+    PF_RELEASE: Final[int] = 7025            # R/W, U16, 解除永久保護 (Doc: 7026)
+    # 7026-7028: Reserved (Doc: 7027-7029)
     
     # Rack offset
     RACK_OFFSET: Final[int] = 30             # 每個 Rack 偏移量
+    
+    # Base address for first rack (actual Modbus address)
+    BASE_ADDRESS: Final[int] = 6999          # Doc: 7000
     
     @classmethod
     def get_rack_address(cls, base_address: int, rack_number: int) -> int:
@@ -209,39 +217,72 @@ class CUBE_RACK_REGISTERS:
         Calculate register address for a specific rack.
         
         Args:
-            base_address: Base register address (e.g., 7000 for RACK_VOLTAGE)
+            base_address: Base register address (actual Modbus address)
             rack_number: Rack number (1-based)
             
         Returns:
             Actual register address for the specified rack
         """
         return base_address + cls.RACK_OFFSET * (rack_number - 1)
+    
+    @classmethod
+    def doc_to_actual(cls, doc_address: int) -> int:
+        """Convert documentation address to actual Modbus address."""
+        return doc_address + CUBE_ADDRESS_OFFSET
 
 
 class CUBE_SYSTEM_REGISTERS:
     """
-    CUBE Modbus TCP System-Level Registers (4000 series).
+    CUBE Modbus TCP System-Level Registers (4000 series in documentation).
     
     Reference: CUBE 電池組暫存器通訊表 V1.0.3
-    整櫃系統資訊
+    整櫃 / Container 等級系統資訊
+    
+    IMPORTANT: Addresses here are the ACTUAL Modbus addresses to use.
+    Documentation addresses need -1 offset for actual communication.
+    (Doc 4000 -> Actual 3999)
     """
     
-    SYSTEM_VOLTAGE: Final[int] = 4000        # RO, U16, 0.1V, 系統總電壓
-    SYSTEM_CURRENT: Final[int] = 4001        # RO, S16, 0.1A, 系統總電流
-    SYSTEM_SOC: Final[int] = 4002            # RO, U16, 0.1%, 系統SOC
-    SYSTEM_SOH: Final[int] = 4003            # RO, U16, 1%, 系統SOH
-    SYSTEM_CELL_MAX_V: Final[int] = 4004     # RO, U16, 0.001V, 系統最高電芯電壓
-    SYSTEM_CELL_MIN_V: Final[int] = 4005     # RO, U16, 0.001V, 系統最低電芯電壓
-    SYSTEM_CELL_MAX_T: Final[int] = 4006     # RO, S16, 1°C, 系統最高溫度
-    SYSTEM_CELL_MIN_T: Final[int] = 4007     # RO, S16, 1°C, 系統最低溫度
-    SYSTEM_CHARGE_V_LIMIT: Final[int] = 4008 # RO, U16, 0.1V, 建議充電電壓
-    SYSTEM_DISCHARGE_V_LIMIT: Final[int] = 4009  # RO, U16, 0.1V, 建議放電電壓
-    SYSTEM_CHARGE_I_LIMIT: Final[int] = 4010 # RO, U16, 0.1A, 建議充電電流
-    SYSTEM_DISCHARGE_I_LIMIT: Final[int] = 4011  # RO, U16, 0.1A, 建議放電電流
-    RACK_COUNT: Final[int] = 4012            # RO, U16, 併聯Rack數量
-    SYSTEM_HEART_BEAT: Final[int] = 4013     # RO, U16, 系統心跳
-    SYSTEM_FLAG: Final[int] = 4014           # RO, U16, 系統告警旗標
-    # 4015-4029: Reserved
+    # Base address (actual Modbus address)
+    BASE_ADDRESS: Final[int] = 3999          # Doc: 4000
+    
+    # System registers - Actual Modbus addresses (doc address - 1)
+    VOL_AVG: Final[int] = 3999               # RO, U16, 0.1V, 平均電壓 (Doc: 4000)
+    TOTAL_CURR: Final[int] = 4000            # RO, S16, 0.1A, 總電流 (Doc: 4001)
+    TOTAL_POWER: Final[int] = 4001           # RO, S16, 0.1kW, 總功率 (Doc: 4002)
+    DELIY_CHG: Final[int] = 4002             # RO, U16, 0.1kWh, 充電累計 (Doc: 4003)
+    DELIY_DSC: Final[int] = 4003             # RO, U16, 0.1kWh, 放電累計 (Doc: 4004)
+    SOC_AVG: Final[int] = 4004               # RO, U16, 0.1%, 平均SOC (Doc: 4005)
+    RM_TOTAL: Final[int] = 4005              # RO, U16, AH, 總殘留電量 (Doc: 4006)
+    FCC_TOTAL: Final[int] = 4006             # RO, U16, AH, 總滿充電量 (Doc: 4007)
+    ONLINE_NO: Final[int] = 4007             # RO, U16, 在線數量 (Doc: 4008)
+    ALLOW_POWER: Final[int] = 4008           # RO, U16, 0.1kW, 允許功率 (Doc: 4009)
+    RIGHT_STATE: Final[int] = 4009           # RO, U16, bitfield Rack1~12 (Doc: 4010)
+    LEFT_STATE: Final[int] = 4010            # RO, U16, bitfield Rack13~24 (Doc: 4011)
+    SYS_STATE: Final[int] = 4011             # RO, U16, 0/1 系統狀態 (Doc: 4012)
+    ALL_MAX_V: Final[int] = 4012             # RO, U16, 0.1V, 最高電壓Rack (Doc: 4013)
+    ALL_MIN_V: Final[int] = 4013             # RO, U16, 0.1V, 最低電壓Rack (Doc: 4014)
+    VOL_DIFF: Final[int] = 4014              # RO, U16, 0.1V, 電壓差 (Doc: 4015)
+    ALL_MAX_T: Final[int] = 4015             # RO, S16, 1°C, 最高溫度 (Doc: 4016)
+    ALL_MIN_T: Final[int] = 4016             # RO, S16, 1°C, 最低溫度 (Doc: 4017)
+    ON_ALL_RELAY: Final[int] = 4017          # R/W, U16, 0/1, 全開繼電器 (Doc: 4018)
+    OFF_ALL_RELAY: Final[int] = 4018         # R/W, U16, 0/1, 全關繼電器 (Doc: 4019)
+    # 4019-4025: Reserved (Doc: 4020-4026)
+    FIRE_ALARM_1: Final[int] = 4026          # RO, U16, 0/1, 火警1 (Doc: 4027)
+    FIRE_ALARM_2: Final[int] = 4027          # RO, U16, 0/1, 火警2 (Doc: 4028)
+    # 4028-4040: Reserved (Doc: 4029-4041)
+    ALLOW_POWER_DSC: Final[int] = 4041       # RO, U16, 0.1kW, 允許放電功率 (Doc: 4042)
+    ALLOW_POWER_CHG: Final[int] = 4042       # RO, U16, 0.1kW, 允許充電功率 (Doc: 4043)
+    
+    # Legacy aliases for backward compatibility
+    SYSTEM_VOLTAGE: Final[int] = VOL_AVG
+    SYSTEM_CURRENT: Final[int] = TOTAL_CURR
+    SYSTEM_SOC: Final[int] = SOC_AVG
+    
+    @classmethod
+    def doc_to_actual(cls, doc_address: int) -> int:
+        """Convert documentation address to actual Modbus address."""
+        return doc_address + CUBE_ADDRESS_OFFSET
 
 
 # =============================================================================
