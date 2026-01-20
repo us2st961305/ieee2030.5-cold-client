@@ -82,6 +82,9 @@ class MirrorUsagePointAdapter:
                 self._create_power_reading_type(),
                 self._create_charge_energy_reading_type(),
                 self._create_discharge_energy_reading_type(),
+                self._create_max_temperature_reading_type(),
+                self._create_min_temperature_reading_type(),
+                self._create_avg_temperature_reading_type(),
             ]
         
         mup = MirrorUsagePoint(
@@ -182,6 +185,57 @@ class MirrorUsagePointAdapter:
             ),
         )
 
+    def _create_max_temperature_reading_type(self) -> MirrorMeterReading:
+        """Create MirrorMeterReading for Maximum Temperature (°C)."""
+        return MirrorMeterReading(
+            mRID=self._generate_mrid(),
+            description="Battery Max Temperature",
+            version=1,
+            ReadingType=ReadingType(
+                accumulationBehaviour=int(AccumulationBehaviourType.INSTANTANEOUS),
+                commodity=int(CommodityType.ELECTRICITY_STORAGE),
+                dataQualifier=int(DataQualifierType.MAXIMUM),
+                flowDirection=int(FlowDirectionType.NOT_APPLICABLE),
+                kind=int(KindType.TEMPERATURE),
+                powerOfTenMultiplier=0,  # 1°C units (from CUBE register 4016)
+                uom=int(UomType.CELSIUS),
+            ),
+        )
+
+    def _create_min_temperature_reading_type(self) -> MirrorMeterReading:
+        """Create MirrorMeterReading for Minimum Temperature (°C)."""
+        return MirrorMeterReading(
+            mRID=self._generate_mrid(),
+            description="Battery Min Temperature",
+            version=1,
+            ReadingType=ReadingType(
+                accumulationBehaviour=int(AccumulationBehaviourType.INSTANTANEOUS),
+                commodity=int(CommodityType.ELECTRICITY_STORAGE),
+                dataQualifier=int(DataQualifierType.MINIMUM),
+                flowDirection=int(FlowDirectionType.NOT_APPLICABLE),
+                kind=int(KindType.TEMPERATURE),
+                powerOfTenMultiplier=0,  # 1°C units (from CUBE register 4017)
+                uom=int(UomType.CELSIUS),
+            ),
+        )
+
+    def _create_avg_temperature_reading_type(self) -> MirrorMeterReading:
+        """Create MirrorMeterReading for Average Temperature (°C)."""
+        return MirrorMeterReading(
+            mRID=self._generate_mrid(),
+            description="Battery Avg Temperature",
+            version=1,
+            ReadingType=ReadingType(
+                accumulationBehaviour=int(AccumulationBehaviourType.INSTANTANEOUS),
+                commodity=int(CommodityType.ELECTRICITY_STORAGE),
+                dataQualifier=int(DataQualifierType.AVERAGE),
+                flowDirection=int(FlowDirectionType.NOT_APPLICABLE),
+                kind=int(KindType.TEMPERATURE),
+                powerOfTenMultiplier=0,  # 1°C units (calculated average)
+                uom=int(UomType.CELSIUS),
+            ),
+        )
+
     def snapshot_to_meter_readings(
         self,
         snapshot: BMSSnapshot,
@@ -269,6 +323,45 @@ class MirrorUsagePointAdapter:
             timestamp=ts,
             reading_type=self._create_discharge_energy_reading_type().ReadingType,
             mrid=reading_mrids.get("discharge_energy") if reading_mrids else None,
+        ))
+        
+        # Max Temperature Reading (1°C units)
+        # Register 4016: all_max_t (1°C)
+        max_temp = getattr(snapshot.system, 'max_temperature', 0)
+        max_temp_value = int(max_temp)  # 1°C units
+        readings.append(self._create_meter_reading(
+            name="max_temperature",
+            description="Battery Max Temperature",
+            value=max_temp_value,
+            timestamp=ts,
+            reading_type=self._create_max_temperature_reading_type().ReadingType,
+            mrid=reading_mrids.get("max_temperature") if reading_mrids else None,
+        ))
+        
+        # Min Temperature Reading (1°C units)
+        # Register 4017: all_min_t (1°C)
+        min_temp = getattr(snapshot.system, 'min_temperature', 0)
+        min_temp_value = int(min_temp)  # 1°C units
+        readings.append(self._create_meter_reading(
+            name="min_temperature",
+            description="Battery Min Temperature",
+            value=min_temp_value,
+            timestamp=ts,
+            reading_type=self._create_min_temperature_reading_type().ReadingType,
+            mrid=reading_mrids.get("min_temperature") if reading_mrids else None,
+        ))
+        
+        # Average Temperature Reading (1°C units)
+        # Calculated from max and min temperature
+        avg_temp = (max_temp + min_temp) / 2
+        avg_temp_value = int(avg_temp)  # 1°C units
+        readings.append(self._create_meter_reading(
+            name="avg_temperature",
+            description="Battery Avg Temperature",
+            value=avg_temp_value,
+            timestamp=ts,
+            reading_type=self._create_avg_temperature_reading_type().ReadingType,
+            mrid=reading_mrids.get("avg_temperature") if reading_mrids else None,
         ))
         
         return readings

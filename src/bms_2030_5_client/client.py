@@ -87,6 +87,12 @@ class BMSClient:
         # Alarm tracking for LogEvent
         self._previous_alarm_status: int = 0  # Previous alarm status (bitfield)
         self._log_event_id_counter: int = 0  # Unique LogEvent ID counter
+        
+        # Cycle tracking (charge >10% + discharge >10% = 1 cycle)
+        self._cycle_count: int = 0  # Total completed cycles
+        self._last_soc: Optional[float] = None  # Last recorded SOC
+        self._charge_accumulated: float = 0.0  # Accumulated charge % in current cycle
+        self._discharge_accumulated: float = 0.0  # Accumulated discharge % in current cycle
 
     @classmethod
     def from_config(cls, config_path: Union[str, Path]) -> "BMSClient":
@@ -409,16 +415,18 @@ class BMSClient:
         """
         Register MirrorUsagePoint (meter) with IEEE 2030.5 server.
         
-        Uses two-step process required by the server:
+        Uses multi-step process required by the server:
         1. POST MirrorUsagePoint without MirrorMeterReading
-        2. PUT MirrorUsagePoint with MirrorMeterReading
+        2. POST each MirrorMeterReading individually to the MUP
         
         Creates meter readings for:
-        - Total SOC (%)
         - Total Current (A)
         - Total Power (kW)
         - Charge Energy (kWh)
         - Discharge Energy (kWh)
+        - Max Temperature (°C)
+        - Min Temperature (°C)
+        - Avg Temperature (°C)
         """
         logger.info("Registering MirrorUsagePoint (meter)...")
         
@@ -436,45 +444,60 @@ class BMSClient:
             self._mup_href = location
             logger.info(f"Created MirrorUsagePoint at: {self._mup_href}")
             
-            # Step 2: Update MirrorUsagePoint WITH MirrorMeterReading (PUT)
+            # Step 2: POST each MirrorMeterReading individually
+            # Get the readings from adapter
             mup_with_readings = self.adapter.create_bms_mirror_usage_point(
                 device_lfdi=self.ieee2030_5_client.lfdi,
                 description="CUBE BMS Meter",
                 post_rate=self.config.ieee2030_5.poll_rate,
-                include_readings=True,  # Include readings for PUT update
-            )
-            # Use same mRID as created resource
-            mup_with_readings.mRID = mup.mRID
-            
-            success = await self.ieee2030_5_client.update_mirror_usage_point(
-                self._mup_href,
-                mup_with_readings,
+                include_readings=True,
             )
             
-            if success:
-                # Fetch the updated resource to cache reading mRIDs
-                created_mup = await self.ieee2030_5_client.get_mirror_usage_point(self._mup_href)
-                
-                # Cache reading mRIDs for future updates
-                if created_mup and created_mup.MirrorMeterReading:
-                    for reading in created_mup.MirrorMeterReading:
-                        if reading.description and reading.mRID:
-                            # Map description to mRID
-                            name = reading.description.lower().replace(" ", "_")
-                            if "soc" in name:
-                                self._reading_mrids["soc"] = reading.mRID
-                            elif "current" in name:
-                                self._reading_mrids["current"] = reading.mRID
-                            elif "power" in name:
-                                self._reading_mrids["power"] = reading.mRID
-                            elif "charge" in name and "discharge" not in name:
-                                self._reading_mrids["charge_energy"] = reading.mRID
-                            elif "discharge" in name:
-                                self._reading_mrids["discharge_energy"] = reading.mRID
-                
-                logger.info(f"Registered MirrorUsagePoint with readings at: {self._mup_href}")
-            else:
-                logger.warning("Failed to update MirrorUsagePoint with readings")
+            # POST each reading individually
+            success_count = 0
+            for reading in mup_with_readings.MirrorMeterReading:
+                try:
+                    success = await self.ieee2030_5_client.update_mirror_meter_reading(
+                        self._mup_href,
+                        reading,
+                    )
+                    if success:
+                        success_count += 1
+                        logger.debug(f"Registered MirrorMeterReading: {reading.description}")
+                    else:
+                        logger.warning(f"Failed to register MirrorMeterReading: {reading.description}")
+                except Exception as e:
+                    logger.warning(f"Failed to register MirrorMeterReading {reading.description}: {e}")
+            
+            logger.info(f"Registered {success_count}/{len(mup_with_readings.MirrorMeterReading)} MirrorMeterReadings")
+            
+            # Fetch the updated resource to cache reading mRIDs
+            created_mup = await self.ieee2030_5_client.get_mirror_usage_point(self._mup_href)
+            
+            # Cache reading mRIDs for future updates
+            if created_mup and created_mup.MirrorMeterReading:
+                for reading in created_mup.MirrorMeterReading:
+                    if reading.description and reading.mRID:
+                        # Map description to mRID
+                        name = reading.description.lower().replace(" ", "_")
+                        if "soc" in name:
+                            self._reading_mrids["soc"] = reading.mRID
+                        elif "current" in name:
+                            self._reading_mrids["current"] = reading.mRID
+                        elif "power" in name:
+                            self._reading_mrids["power"] = reading.mRID
+                        elif "charge" in name and "discharge" not in name:
+                            self._reading_mrids["charge_energy"] = reading.mRID
+                        elif "discharge" in name:
+                            self._reading_mrids["discharge_energy"] = reading.mRID
+                        elif "max" in name and "temp" in name:
+                            self._reading_mrids["max_temperature"] = reading.mRID
+                        elif "min" in name and "temp" in name:
+                            self._reading_mrids["min_temperature"] = reading.mRID
+                        elif "avg" in name and "temp" in name:
+                            self._reading_mrids["avg_temperature"] = reading.mRID
+            
+            logger.info(f"Registered MirrorUsagePoint with {len(self._reading_mrids)} readings at: {self._mup_href}")
             
         except Exception as e:
             logger.warning(f"Failed to register MirrorUsagePoint: {e}")
@@ -571,11 +594,40 @@ class BMSClient:
             logger.warning("Cannot send battery status: LFDI not available")
             return
         
-        # Fixed values as requested
+        # Get latest snapshot for real data
+        snapshot = self.latest_snapshot
+        
+        # Calculate average SOH from all active racks
+        soh = 80.0  # Default value
+        if snapshot and snapshot.active_racks:
+            soh = sum(r.soh for r in snapshot.active_racks) / len(snapshot.active_racks)
+            
+            # Update cycle tracking based on SOC changes
+            current_soc = snapshot.average_soc
+            if self._last_soc is not None:
+                soc_delta = current_soc - self._last_soc
+                
+                if soc_delta > 0:
+                    # Charging: accumulate charge %
+                    self._charge_accumulated += soc_delta
+                elif soc_delta < 0:
+                    # Discharging: accumulate discharge %
+                    self._discharge_accumulated += abs(soc_delta)
+                
+                # Check if a complete cycle is reached (charge >10% AND discharge >10%)
+                if self._charge_accumulated >= 10.0 and self._discharge_accumulated >= 10.0:
+                    self._cycle_count += 1
+                    # Reset accumulators, keeping excess
+                    self._charge_accumulated -= 10.0
+                    self._discharge_accumulated -= 10.0
+                    logger.info(f"Cycle completed! Total cycles: {self._cycle_count}")
+            
+            self._last_soc = current_soc
+        
         payload = {
             "lfdi": lfdi,
-            "cycles": 0,
-            "soh": 80
+            "cycles": self._cycle_count,
+            "soh": round(soh, 2)
         }
         
         try:
@@ -587,7 +639,10 @@ class BMSClient:
                 )
                 
                 if response.status_code in (200, 201):
-                    logger.info(f"Battery status sent successfully: LFDI={lfdi}, SOH=80, Cycles=0")
+                    logger.info(
+                        f"Battery status sent successfully: LFDI={lfdi}, "
+                        f"SOH={payload['soh']:.2f}%, Cycles={self._cycle_count}"
+                    )
                 else:
                     logger.warning(
                         f"Battery status upload failed: {response.status_code} - {response.text}"
