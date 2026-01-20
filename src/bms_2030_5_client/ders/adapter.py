@@ -133,10 +133,21 @@ class DERStatusAdapter:
     """
 
     def _to_soc(self, percent: float) -> StateOfCharge:
-        """Convert percentage to StateOfCharge."""
+        """Convert percentage to StateOfCharge.
+        
+        Args:
+            percent: SOC as percentage (0.0 - 100.0)
+            
+        Returns:
+            StateOfCharge with value 0-10000 (0.00% - 100.00%)
+        """
+        # Clamp to valid range 0-100%
+        clamped = max(0.0, min(100.0, percent))
+        # Convert to IEEE 2030.5 format: 0-10000
+        value = int(clamped * 100)
         return StateOfCharge(
             dateTime=int(datetime.now().timestamp()),
-            value=int(percent * 100)
+            value=value
         )
 
     def _aggregate_alarm_status(self, snapshot: BMSSnapshot) -> int:
@@ -203,13 +214,19 @@ class DERStatusAdapter:
         
         ts = int(datetime.now().timestamp())
 
+        # Use system total_soc from register 4005 as primary source,
+        # fallback to average_soc from active racks if system SOC is 0
+        soc = snapshot.system.total_soc
+        if soc == 0.0 and snapshot.average_soc > 0.0:
+            soc = snapshot.average_soc
+
         return DERStatus(
             href=href,
             readingTime=ts,
-            alarmStatus=f"{alarm_status:08X}",  # Always send, even when 00000000
+            alarmStatus=f"{alarm_status:08X}",  # Simple hexBinary string
             genConnectStatus=ConnectStatusValue(dateTime=ts, value=f"{int(connect_status):02X}"),
             operationalModeStatus=OperationalModeStatusValue(dateTime=ts, value=f"{int(op_mode):02X}"),
-            stateOfChargeStatus=self._to_soc(snapshot.average_soc),
+            stateOfChargeStatus=self._to_soc(soc),
             storConnectStatus=ConnectStatusValue(dateTime=ts, value=f"{int(connect_status):02X}"),
         )
 

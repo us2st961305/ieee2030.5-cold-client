@@ -29,6 +29,7 @@ from bms_2030_5_client.models.ieee2030_5_models import (
     OperationalModeStatusValue,
     InverterStatusValue,
     StorageModeStatusValue,
+    AlarmStatusValue,
     Temperature,
     EndDevice,
     EndDeviceList,
@@ -39,6 +40,7 @@ from bms_2030_5_client.models.ieee2030_5_models import (
     Time,
     Reading,
     MirrorMeterReading,
+    MirrorMeterReadingList,
     # Metering models
     AccumulationBehaviourType,
     CommodityType,
@@ -97,6 +99,7 @@ __all__ = [
     "Time",
     "Reading",
     "MirrorMeterReading",
+    "MirrorMeterReadingList",
     # Metering models
     "AccumulationBehaviourType",
     "CommodityType",

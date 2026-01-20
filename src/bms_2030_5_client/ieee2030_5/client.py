@@ -32,6 +32,7 @@ from bms_2030_5_client.models import (
     MirrorUsagePoint,
     MirrorUsagePointList,
     MirrorMeterReading,
+    MirrorMeterReadingList,
     LogEvent,
 )
 from bms_2030_5_client.ieee2030_5.xml_utils import (
@@ -301,12 +302,15 @@ class IEEE2030_5Client:
 
         try:
             xml_data = dataclass_to_xml(data)
+            logger.debug(f"PUT {path} XML:\n{xml_data}")
             response = await self._client.put(path, content=xml_data)
             response.raise_for_status()
             return True
             
         except httpx.HTTPStatusError as e:
             logger.error(f"PUT error: {e.response.status_code}")
+            logger.error(f"PUT request XML: {xml_data}")
+            logger.error(f"Response body: {e.response.text}")
             return False
 
     # =========================================================================
@@ -741,6 +745,44 @@ class IEEE2030_5Client:
             if not await self.update_mirror_meter_reading(mup_href, reading):
                 success = False
         return success
+
+    async def post_mirror_meter_reading_list(
+        self,
+        mup_href: str,
+        readings: list[MirrorMeterReading],
+    ) -> bool:
+        """
+        Post a MirrorMeterReadingList to a MirrorUsagePoint.
+        
+        This method wraps multiple MirrorMeterReading objects in a
+        MirrorMeterReadingList and posts them all at once, which is
+        more efficient than posting individually.
+        
+        Args:
+            mup_href: The href of the MirrorUsagePoint
+            readings: List of MirrorMeterReading objects
+            
+        Returns:
+            True if successful
+        """
+        if not readings:
+            logger.warning("No readings to post")
+            return False
+        
+        # Create MirrorMeterReadingList wrapper
+        reading_list = MirrorMeterReadingList(
+            all=len(readings),
+            results=len(readings),
+            MirrorMeterReading=readings,
+        )
+        
+        try:
+            _, location = await self._post(mup_href, reading_list, None)
+            logger.info(f"Posted MirrorMeterReadingList ({len(readings)} readings) to {mup_href}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to post MirrorMeterReadingList: {e}")
+            return False
 
     # =========================================================================
     # LogEvent Operations

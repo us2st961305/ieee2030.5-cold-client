@@ -308,7 +308,7 @@ class BMSClient:
         der_status = self.adapter.snapshot_to_der_status(snapshot)
         der_availability = self.adapter.snapshot_to_der_availability(snapshot)
         
-        # Get current alarm status from DERStatus
+        # Get current alarm status from DERStatus (now a simple string)
         current_alarm = 0
         if der_status.alarmStatus:
             try:
@@ -317,7 +317,15 @@ class BMSClient:
                 current_alarm = 0
 
         # Report to server
-        logger.debug(f"Reporting DER status: SOC={snapshot.average_soc:.1f}%, alarmStatus={der_status.alarmStatus}")
+        soc_value = der_status.stateOfChargeStatus.value if der_status.stateOfChargeStatus else 0
+        alarm_value = der_status.alarmStatus if der_status.alarmStatus else "00000000"
+        logger.debug(
+            f"Reporting DER status: system_soc={snapshot.system.total_soc:.1f}%, "
+            f"avg_soc={snapshot.average_soc:.1f}%, "
+            f"active_racks={len(snapshot.active_racks)}, "
+            f"stateOfChargeStatus.value={soc_value}, "
+            f"alarmStatus={alarm_value}"
+        )
         
         try:
             await self.ieee2030_5_client.update_der_status(
@@ -444,7 +452,7 @@ class BMSClient:
             self._mup_href = location
             logger.info(f"Created MirrorUsagePoint at: {self._mup_href}")
             
-            # Step 2: POST each MirrorMeterReading individually
+            # Step 2: POST all MirrorMeterReading using MirrorMeterReadingList
             # Get the readings from adapter
             mup_with_readings = self.adapter.create_bms_mirror_usage_point(
                 device_lfdi=self.ieee2030_5_client.lfdi,
@@ -453,23 +461,17 @@ class BMSClient:
                 include_readings=True,
             )
             
-            # POST each reading individually
-            success_count = 0
-            for reading in mup_with_readings.MirrorMeterReading:
-                try:
-                    success = await self.ieee2030_5_client.update_mirror_meter_reading(
-                        self._mup_href,
-                        reading,
-                    )
-                    if success:
-                        success_count += 1
-                        logger.debug(f"Registered MirrorMeterReading: {reading.description}")
-                    else:
-                        logger.warning(f"Failed to register MirrorMeterReading: {reading.description}")
-                except Exception as e:
-                    logger.warning(f"Failed to register MirrorMeterReading {reading.description}: {e}")
-            
-            logger.info(f"Registered {success_count}/{len(mup_with_readings.MirrorMeterReading)} MirrorMeterReadings")
+            # POST all readings as a list
+            readings = mup_with_readings.MirrorMeterReading
+            if readings:
+                success = await self.ieee2030_5_client.post_mirror_meter_reading_list(
+                    self._mup_href,
+                    readings,
+                )
+                if success:
+                    logger.info(f"Registered {len(readings)} MirrorMeterReadings as list")
+                else:
+                    logger.warning("Failed to register MirrorMeterReadings as list")
             
             # Fetch the updated resource to cache reading mRIDs
             created_mup = await self.ieee2030_5_client.get_mirror_usage_point(self._mup_href)
@@ -541,26 +543,22 @@ class BMSClient:
             reading_mrids=self._reading_mrids,
         )
 
-        # Upload each reading
+        # Upload all readings as a list
         logger.debug(
             f"Uploading meter readings: SOC={snapshot.system.total_soc:.1f}%, "
             f"Current={snapshot.system.total_current:.1f}A, "
             f"Power={snapshot.system.total_power:.1f}kW"
         )
         
-        uploaded_count = 0
-        for reading in readings:
-            try:
-                success = await self.ieee2030_5_client.update_mirror_meter_reading(
-                    self._mup_href,
-                    reading,
-                )
-                if success:
-                    uploaded_count += 1
-            except Exception as e:
-                logger.error(f"Failed to upload {reading.description}: {e}")
-        
-        logger.debug(f"Uploaded {uploaded_count}/{len(readings)} meter readings")
+        if readings:
+            success = await self.ieee2030_5_client.post_mirror_meter_reading_list(
+                self._mup_href,
+                readings,
+            )
+            if success:
+                logger.debug(f"Uploaded {len(readings)} meter readings as list")
+            else:
+                logger.warning("Failed to upload meter readings as list")
 
     async def _battery_status_loop(self) -> None:
         """

@@ -262,18 +262,6 @@ class MirrorUsagePointAdapter:
         ts = int(snapshot.timestamp.timestamp())
         readings = []
         
-        # SOC Reading (0.1% units from CUBE, store as 0.1%)
-        # Register 4005: SOC_avg (0.1%)
-        soc_value = int(snapshot.system.total_soc * 10)  # Convert % to 0.1% units
-        readings.append(self._create_meter_reading(
-            name="soc",
-            description="Battery SOC",
-            value=soc_value,
-            timestamp=ts,
-            reading_type=self._create_soc_reading_type().ReadingType,
-            mrid=reading_mrids.get("soc") if reading_mrids else None,
-        ))
-        
         # Current Reading (0.1A units from CUBE)
         # Register 4001: total_curr (0.1A) - signed, positive=charge
         current_value = int(snapshot.system.total_current * 10)  # Convert A to 0.1A

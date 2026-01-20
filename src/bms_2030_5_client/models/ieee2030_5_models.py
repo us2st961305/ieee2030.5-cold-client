@@ -123,9 +123,9 @@ class StorageModeStatusValue:
 @dataclass_json
 @dataclass
 class AlarmStatusValue:
-    """Alarm status with timestamp. Value is 8-character hex binary string (32-bit flags)."""
+    """Alarm status with timestamp. Value is 4-character hex binary string (16-bit flags / HexBinary16)."""
     dateTime: int = 0
-    value: str = "00000000"
+    value: str = "0000"
 
 
 @dataclass_json
@@ -200,8 +200,8 @@ class DERStatus:
     Reference: IEEE Std 2030.5-2023, DERStatus resource.
     
     alarmStatus: Indicates current alarms/fault conditions as xs:hexBinary.
+                 8-character hex string (e.g., "00000000").
                  Maps from BMS error status registers to IEEE 2030.5 format.
-                 Format: 8-character hex string (e.g., "00000001").
     """
     href: Optional[str] = None
     readingTime: int = 0  # Timestamp of the reading
@@ -629,6 +629,21 @@ class MirrorMeterReading:
     MirrorReadingSet: List[MirrorReadingSet] = field(default_factory=list)
     Reading: Optional[MeterReading] = None  # Current/latest reading
     ReadingType: Optional[ReadingType] = None
+
+
+@dataclass_json
+@dataclass
+class MirrorMeterReadingList:
+    """
+    List of MirrorMeterReading resources.
+    
+    Used to POST multiple meter readings at once to MirrorUsagePoint.
+    IEEE 2030.5 allows posting a list of readings for efficiency.
+    """
+    href: Optional[str] = None
+    all: int = 0
+    results: int = 0
+    MirrorMeterReading: List[MirrorMeterReading] = field(default_factory=list)
 
 
 # Default IANA PEN - replace with your organization's registered PEN
