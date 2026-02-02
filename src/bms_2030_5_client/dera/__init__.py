@@ -14,6 +14,11 @@ from bms_2030_5_client.dera.handler import (
     parse_der_control_from_xml,
     parse_der_control_list_from_xml,
 )
+from bms_2030_5_client.dera.poller import (
+    DERControlPoller,
+    DERControlPollerConfig,
+    DERControlIntegration,
+)
 
 __all__ = [
     "DERAvailabilityAdapter",
@@ -25,3 +30,9 @@ __all__ = [
     "DERControlEventStatus",
     "parse_der_control_from_xml",
     "parse_der_control_list_from_xml",
+    # DER Control Poller
+    "DERControlPoller",
+    "DERControlPollerConfig",
+    "DERControlIntegration",
+]
+
