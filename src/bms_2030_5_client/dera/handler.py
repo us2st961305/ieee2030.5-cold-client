@@ -275,12 +275,13 @@ class DERControlHandler:
             logger.info(f"DERControl has no power setpoint: {event.event_id}")
             return
         
-        # 取代當前活動控制
-        if self._active_event and self._active_event.status == DERControlEventStatus.ACTIVE:
-            self._active_event.status = DERControlEventStatus.SUPERSEDED
-            logger.info(
-                f"DERControl superseded: {self._active_event.event_id} -> {event.event_id}"
-            )
+        # 取代當前活動控制（檢查 ACTIVE 或 COMPLETED 狀態）
+        if self._active_event and self._active_event.event_id != event.event_id:
+            if self._active_event.status in (DERControlEventStatus.ACTIVE, DERControlEventStatus.COMPLETED):
+                self._active_event.status = DERControlEventStatus.SUPERSEDED
+                logger.info(
+                    f"DERControl superseded: {self._active_event.event_id} -> {event.event_id}"
+                )
         
         self._active_event = event
         
@@ -453,6 +454,29 @@ class DERControlHandler:
 
 
 # XML 解析輔助函數
+
+def _find_element(parent, tag_name: str, sep_ns: str, ns: dict):
+    """
+    查找元素，嘗試多種命名空間格式
+    
+    注意：ElementTree 的 Element.__bool__() 在沒有子元素時返回 False，
+    所以不能使用 `elem or fallback` 模式，必須用 `is not None` 檢查
+    """
+    # 方法 1: 使用完整命名空間 URI
+    elem = parent.find(f"{sep_ns}{tag_name}")
+    if elem is not None:
+        return elem
+    
+    # 方法 2: 使用命名空間前綴
+    elem = parent.find(f"sep:{tag_name}", ns)
+    if elem is not None:
+        return elem
+    
+    # 方法 3: 無命名空間
+    elem = parent.find(tag_name)
+    return elem
+
+
 def parse_der_control_from_xml(xml_content: str) -> DERControl:
     """
     從 XML 解析 DERControl
@@ -467,13 +491,9 @@ def parse_der_control_from_xml(xml_content: str) -> DERControl:
     
     # 定義命名空間
     ns = {"sep": "urn:ieee:std:2030.5:ns"}
+    sep_ns = "{urn:ieee:std:2030.5:ns}"
     
     root = ET.fromstring(xml_content)
-    
-    # 處理命名空間
-    if root.tag.startswith("{"):
-        # 有命名空間前綴
-        pass
     
     control = DERControl()
     
@@ -483,41 +503,41 @@ def parse_der_control_from_xml(xml_content: str) -> DERControl:
         control.href = href
     
     # mRID
-    mrid_elem = root.find(".//mRID", ns) or root.find("mRID")
+    mrid_elem = _find_element(root, "mRID", sep_ns, ns)
     if mrid_elem is not None and mrid_elem.text:
         control.mRID = mrid_elem.text
     
     # description
-    desc_elem = root.find(".//description", ns) or root.find("description")
+    desc_elem = _find_element(root, "description", sep_ns, ns)
     if desc_elem is not None and desc_elem.text:
         control.description = desc_elem.text
     
     # interval
-    interval_elem = root.find(".//interval", ns) or root.find("interval")
+    interval_elem = _find_element(root, "interval", sep_ns, ns)
     if interval_elem is not None:
         from bms_2030_5_client.models import DateTimeInterval
         interval = DateTimeInterval()
         
-        start_elem = interval_elem.find("start")
+        start_elem = _find_element(interval_elem, "start", sep_ns, ns)
         if start_elem is not None and start_elem.text:
             interval.start = int(start_elem.text)
         
-        duration_elem = interval_elem.find("duration")
+        duration_elem = _find_element(interval_elem, "duration", sep_ns, ns)
         if duration_elem is not None and duration_elem.text:
             interval.duration = int(duration_elem.text)
         
         control.interval = interval
     
     # DERControlBase
-    base_elem = root.find(".//DERControlBase", ns) or root.find("DERControlBase")
+    base_elem = _find_element(root, "DERControlBase", sep_ns, ns)
     if base_elem is not None:
         control_base = DERControlBase()
         
         # opModFixedW
-        fixed_w_elem = base_elem.find("opModFixedW")
+        fixed_w_elem = _find_element(base_elem, "opModFixedW", sep_ns, ns)
         if fixed_w_elem is not None:
-            value_elem = fixed_w_elem.find("value")
-            mult_elem = fixed_w_elem.find("multiplier")
+            value_elem = _find_element(fixed_w_elem, "value", sep_ns, ns)
+            mult_elem = _find_element(fixed_w_elem, "multiplier", sep_ns, ns)
             
             control_base.opModFixedW = SignedPerCent(
                 value=int(value_elem.text) if value_elem is not None and value_elem.text else 0,
@@ -525,10 +545,10 @@ def parse_der_control_from_xml(xml_content: str) -> DERControl:
             )
         
         # opModFixedVar
-        fixed_var_elem = base_elem.find("opModFixedVar")
+        fixed_var_elem = _find_element(base_elem, "opModFixedVar", sep_ns, ns)
         if fixed_var_elem is not None:
-            value_elem = fixed_var_elem.find("value")
-            mult_elem = fixed_var_elem.find("multiplier")
+            value_elem = _find_element(fixed_var_elem, "value", sep_ns, ns)
+            mult_elem = _find_element(fixed_var_elem, "multiplier", sep_ns, ns)
             
             control_base.opModFixedVar = SignedPerCent(
                 value=int(value_elem.text) if value_elem is not None and value_elem.text else 0,
@@ -536,14 +556,14 @@ def parse_der_control_from_xml(xml_content: str) -> DERControl:
             )
         
         # opModConnect
-        connect_elem = base_elem.find("opModConnect")
+        connect_elem = _find_element(base_elem, "opModConnect", sep_ns, ns)
         if connect_elem is not None and connect_elem.text:
             control_base.opModConnect = connect_elem.text.lower() == "true"
         
         control.DERControlBase = control_base
     
     # primacy
-    primacy_elem = root.find(".//primacy", ns) or root.find("primacy")
+    primacy_elem = _find_element(root, "primacy", sep_ns, ns)
     if primacy_elem is not None and primacy_elem.text:
         control.primacy = int(primacy_elem.text)
     

@@ -134,4 +134,4 @@ __all__ = [
     "DERControl",
     "DERControlList",
     "DERProgram",
-    "DERProgramList",
+    "DERProgramList",]

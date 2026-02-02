@@ -361,12 +361,18 @@ class ModbusPowerWriter:
         """
         EmergencyStop.trigger(reason)
         
-        # 嘗試設定功率為 0（即使模擬模式也記錄）
-        result = await self.set_power(0, source=f"emergency_stop:{reason}")
+        # 立即重置 current_power_w（不需要等待 set_power）
+        self._current_power_w = 0
         
         logger.critical(f"Emergency stop triggered: {reason}")
         
-        return result
+        return PowerWriteResult(
+            success=True,
+            simulated=self.power_controller.simulation_mode,
+            requested_power_w=0,
+            timestamp=datetime.utcnow(),
+            error_message=f"Emergency stop: {reason}"
+        )
 
 
 class PCSPowerAdapter:
