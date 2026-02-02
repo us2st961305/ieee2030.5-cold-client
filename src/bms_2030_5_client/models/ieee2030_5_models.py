@@ -786,3 +786,201 @@ class LogEventList:
     results: int = 0
     pollRate: int = 900
     LogEvent: List[LogEvent] = field(default_factory=list)
+
+# =============================================================================
+# DER Control Models (功率控制)
+# =============================================================================
+
+@dataclass_json
+@dataclass
+class SignedPerCent:
+    """
+    Signed percentage value with multiplier.
+    
+    Used for power setpoints in DERControl.
+    value × 10^multiplier = actual watts
+    """
+    value: int = 0
+    multiplier: int = 0
+    
+    def to_watts(self) -> int:
+        """Convert to watts."""
+        return self.value * (10 ** self.multiplier)
+    
+    @classmethod
+    def from_watts(cls, watts: int) -> "SignedPerCent":
+        """Create from watts value."""
+        if abs(watts) >= 1000000:
+            return cls(value=watts // 1000000, multiplier=6)
+        elif abs(watts) >= 1000:
+            return cls(value=watts // 1000, multiplier=3)
+        else:
+            return cls(value=watts, multiplier=0)
+
+
+@dataclass_json
+@dataclass
+class PerCent:
+    """
+    Unsigned percentage value (0-10000 = 0.00% - 100.00%).
+    
+    Used for limits in DERControl.
+    """
+    value: int = 0  # 0-10000
+    
+    def to_percent(self) -> float:
+        """Convert to percentage (0.0 - 100.0)."""
+        return self.value / 100.0
+    
+    @classmethod
+    def from_percent(cls, percent: float) -> "PerCent":
+        """Create from percentage (0.0 - 100.0)."""
+        return cls(value=int(percent * 100))
+
+
+@dataclass_json
+@dataclass
+class DateTimeInterval:
+    """
+    Time interval for DERControl scheduling.
+    """
+    duration: int = 0  # Duration in seconds (0 = indefinite)
+    start: int = 0     # Start time as Unix timestamp
+    
+    def is_active(self, current_time: Optional[int] = None) -> bool:
+        """Check if the interval is currently active."""
+        import time
+        now = current_time or int(time.time())
+        
+        if now < self.start:
+            return False
+        
+        if self.duration == 0:
+            return True  # Indefinite duration
+        
+        return now < (self.start + self.duration)
+    
+    def seconds_until_start(self, current_time: Optional[int] = None) -> int:
+        """Get seconds until the interval starts."""
+        import time
+        now = current_time or int(time.time())
+        return max(0, self.start - now)
+
+
+@dataclass_json
+@dataclass
+class DERControlBase:
+    """
+    Base DER control parameters.
+    
+    Reference: IEEE Std 2030.5-2023, DERControlBase
+    
+    Power Sign Convention:
+        - Positive (+): Discharge (export to grid)
+        - Negative (-): Charge (import from grid)
+    """
+    # Fixed power modes
+    opModFixedW: Optional[SignedPerCent] = None       # Fixed active power (W)
+    opModFixedVar: Optional[SignedPerCent] = None     # Fixed reactive power (VAR)
+    opModFixedPF: Optional[SignedPerCent] = None      # Fixed power factor
+    
+    # Limit modes
+    opModMaxLimW: Optional[PerCent] = None            # Max power limit (% of rating)
+    
+    # Connect/Disconnect
+    opModConnect: Optional[bool] = None               # True = connect, False = disconnect
+    opModEnergize: Optional[bool] = None              # True = energize, False = de-energize
+    
+    # Ramp rate (gradient)
+    rampTms: Optional[int] = None                     # Ramp time in seconds
+
+
+@dataclass_json
+@dataclass
+class DERControl:
+    """
+    DER Control event from IEEE 2030.5 Server.
+    
+    Reference: IEEE Std 2030.5-2023, DERControl resource
+    
+    This represents a power control command from the EMS/Aggregator.
+    """
+    href: Optional[str] = None
+    mRID: Optional[str] = None                        # Unique identifier (hex string)
+    description: Optional[str] = None
+    version: int = 0
+    
+    # Creation and modification time
+    creationTime: int = 0                             # Unix timestamp
+    
+    # Scheduling
+    interval: Optional[DateTimeInterval] = None       # When this control is active
+    
+    # Event status
+    randomizeStart: Optional[int] = None              # Random delay before start (seconds)
+    randomizeDuration: Optional[int] = None           # Random adjustment to duration
+    
+    # Control parameters
+    DERControlBase: Optional[DERControlBase] = None
+    
+    # Priority (lower = higher priority)
+    primacy: int = 0
+    
+    def is_active(self, current_time: Optional[int] = None) -> bool:
+        """Check if this control is currently active."""
+        if self.interval is None:
+            return True  # No interval means always active
+        return self.interval.is_active(current_time)
+    
+    def get_power_setpoint_w(self) -> Optional[int]:
+        """Get the power setpoint in watts, if specified."""
+        if self.DERControlBase and self.DERControlBase.opModFixedW:
+            return self.DERControlBase.opModFixedW.to_watts()
+        return None
+
+
+@dataclass_json
+@dataclass
+class DERControlList:
+    """
+    List of DERControl resources.
+    """
+    href: Optional[str] = None
+    all: int = 0
+    results: int = 0
+    pollRate: int = 300  # Default 5 minutes
+    DERControl: List[DERControl] = field(default_factory=list)
+
+
+@dataclass_json
+@dataclass
+class DERProgram:
+    """
+    DER Program containing DER controls.
+    
+    Reference: IEEE Std 2030.5-2023, DERProgram resource
+    """
+    href: Optional[str] = None
+    mRID: Optional[str] = None
+    description: Optional[str] = None
+    version: int = 0
+    primacy: int = 0                                  # Program priority
+    
+    # Links to control lists
+    ActiveDERControlListLink: Optional[str] = None
+    DefaultDERControlLink: Optional[str] = None
+    DERControlListLink: Optional[str] = None
+    DERCurveListLink: Optional[str] = None
+
+
+@dataclass_json
+@dataclass
+class DERProgramList:
+    """
+    List of DERProgram resources.
+    """
+    href: Optional[str] = None
+    all: int = 0
+    results: int = 0
+    pollRate: int = 900
+    DERProgram: List[DERProgram] = field(default_factory=list)

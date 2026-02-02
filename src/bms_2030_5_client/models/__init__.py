@@ -60,6 +60,14 @@ from bms_2030_5_client.models.ieee2030_5_models import (
     # LogEvent models
     LogEvent,
     LogEventList,
+    # DER Control models
+    SignedPerCent,
+    PerCent,
+    DERControlBase,
+    DERControl,
+    DERControlList,
+    DERProgram,
+    DERProgramList,
 )
 
 __all__ = [
@@ -119,4 +127,11 @@ __all__ = [
     # LogEvent models
     "LogEvent",
     "LogEventList",
-]
+    # DER Control models
+    "SignedPerCent",
+    "PerCent",
+    "DERControlBase",
+    "DERControl",
+    "DERControlList",
+    "DERProgram",
+    "DERProgramList",
