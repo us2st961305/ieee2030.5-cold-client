@@ -154,7 +154,7 @@ class ModbusBMSClient:
             response = await self._client.read_holding_registers(
                 address=address,
                 count=count,
-                slave=self.unit_id,
+                device_id=self.unit_id,
             )
             
             if response.isError():
@@ -187,7 +187,7 @@ class ModbusBMSClient:
             response = await self._client.write_register(
                 address=address,
                 value=value,
-                slave=self.unit_id,
+                device_id=self.unit_id,
             )
             
             if response.isError():
