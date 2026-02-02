@@ -247,3 +247,88 @@ power_value, power_mult = watts_to_sep_value(5000)  # 5kW
 - Test boundary values (0, max, negative)
 - Verify bitfield parsing
 - Test IEEE 2030.5 XML serialization
+
+---
+
+## ⚠️ Power Control Safety Rules (功率控制安全規範)
+
+**CRITICAL: 開發功率控制功能時必須遵守以下規則**
+
+詳細規範請參考: `.github/power-control-safety.md`
+
+### 絕對禁止 (NEVER)
+- ❌ 直接向 PCS 發送功率控制指令
+- ❌ 繞過模擬模式 (simulation_mode)
+- ❌ 硬編碼 PCS 的 IP 位址或控制端點
+- ❌ 在測試中連接實際 PCS 設備
+- ❌ 生成沒有安全檢查的 DER 控制代碼
+
+### 必須遵守 (ALWAYS)
+- ✅ 預設 `simulation_mode=True`
+- ✅ 使用 `SafePowerController` 或類似的安全包裝
+- ✅ 驗證功率限制 (max_charge_power, max_discharge_power)
+- ✅ 記錄所有功率控制請求到日誌
+- ✅ 測試使用 Mock 和模擬伺服器
+
+### 安全模式層級
+```python
+class ControlMode(Enum):
+    SIMULATION = "simulation"   # 開發/測試：只記錄，不執行
+    DRY_RUN = "dry_run"         # 驗證：完整驗證但不執行
+    PRODUCTION = "production"   # 生產：需要特殊授權 token
+```
+
+### 功率控制代碼範例
+```python
+# ✅ 正確：使用安全包裝
+from bms_2030_5_client.power_control import SafePowerController, ControlMode
+
+controller = SafePowerController(
+    simulation_mode=True,  # 預設必須為 True
+    max_power_kw=100
+)
+
+# 模擬模式下只會記錄，不會實際控制
+result = await controller.set_power_setpoint(
+    power_w=50000,  # 50kW
+    mode=ControlMode.SIMULATION
+)
+```
+
+### 環境變數
+```bash
+# 開發/測試環境 (預設)
+POWER_CONTROL_SIMULATION=true
+
+# 生產環境 (需要額外授權)
+POWER_CONTROL_SIMULATION=false
+POWER_CONTROL_SAFETY_TOKEN=<secure_token>
+POWER_CONTROL_CONFIRM_PRODUCTION=I_UNDERSTAND_THE_RISKS
+```
+
+### IEEE 2030.5 DER Control 安全處理
+當收到來自 IEEE 2030.5 Server 的 DERControl 時：
+1. 解析 `opModFixedW` (固定功率) 指令
+2. 驗證功率值是否在允許範圍內
+3. 檢查 `simulation_mode` 狀態
+4. 記錄請求到審計日誌
+5. 僅在生產模式且授權後才執行實際控制
+
+```python
+async def handle_der_control(control: DERControl):
+    # 1. 提取功率設定點
+    power_w = sep_value_to_watts(control.op_mod_fixed_w)
+    
+    # 2. 驗證
+    validator = PowerValidator(power_limits)
+    errors = validator.validate(power_w, current_soc)
+    if errors:
+        raise PowerControlValidationError(errors)
+    
+    # 3. 安全執行
+    if simulation_mode:
+        logger.info(f"[SIMULATION] DER Control: {power_w}W")
+        return DERControlResponse(status="simulated")
+    
+    # 4. 生產模式需要額外檢查...
+```

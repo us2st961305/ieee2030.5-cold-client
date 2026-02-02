@@ -2,6 +2,7 @@
 Pytest fixtures for BMS Client tests.
 """
 
+import os
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,6 +11,44 @@ from pathlib import Path
 from bms_2030_5_client.config import Config
 from bms_2030_5_client.models import RackData, SystemData, BMSSnapshot, RackStatus
 
+
+# =============================================================================
+# Power Control Safety Enforcement (功率控制安全強制)
+# =============================================================================
+
+def pytest_configure(config):
+    """pytest 啟動時的安全檢查"""
+    # 強制設置模擬模式環境變數
+    os.environ["POWER_CONTROL_SIMULATION"] = "true"
+    
+    # 檢查是否有人嘗試連接實際 PCS
+    if os.getenv("ALLOW_REAL_PCS_CONNECTION", "false").lower() == "true":
+        pytest.exit(
+            "ERROR: Real PCS connection is not allowed in test environment!\n"
+            "Remove ALLOW_REAL_PCS_CONNECTION or set it to 'false'"
+        )
+
+
+@pytest.fixture(autouse=True)
+def enforce_power_control_simulation(monkeypatch):
+    """
+    強制所有測試使用模擬模式
+    
+    此 fixture 自動應用於所有測試，確保：
+    1. POWER_CONTROL_SIMULATION 設為 true
+    2. 移除可能允許生產模式的環境變數
+    """
+    monkeypatch.setenv("POWER_CONTROL_SIMULATION", "true")
+    monkeypatch.setenv("ALLOW_REAL_PCS_CONNECTION", "false")
+    # 移除生產模式授權（如果存在）
+    monkeypatch.delenv("POWER_CONTROL_SAFETY_TOKEN", raising=False)
+    monkeypatch.delenv("POWER_CONTROL_CONFIRM_PRODUCTION", raising=False)
+    yield
+
+
+# =============================================================================
+# Standard Test Fixtures
+# =============================================================================
 
 @pytest.fixture
 def sample_config():
