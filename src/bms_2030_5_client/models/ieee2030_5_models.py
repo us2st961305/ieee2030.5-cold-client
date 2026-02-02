@@ -984,3 +984,155 @@ class DERProgramList:
     results: int = 0
     pollRate: int = 900
     DERProgram: List[DERProgram] = field(default_factory=list)
+
+
+# =============================================================================
+# Function Set Assignments (FSA) Models
+# =============================================================================
+
+@dataclass_json
+@dataclass
+class FunctionSetAssignments:
+    """
+    Function Set Assignments resource.
+    
+    Reference: IEEE Std 2030.5-2023, FunctionSetAssignments
+    
+    FSA defines which function sets (programs, time resources, etc.) 
+    are assigned to an EndDevice. The client must poll/subscribe to 
+    detect changes.
+    """
+    href: Optional[str] = None
+    mRID: Optional[str] = None
+    description: Optional[str] = None
+    version: int = 0
+    
+    # Links to function sets
+    DERProgramListLink: Optional[str] = None
+    ResponseSetListLink: Optional[str] = None
+    TimeLink: Optional[str] = None
+    
+    # Other function set links (as needed)
+    CustomerAccountListLink: Optional[str] = None
+    DemandResponseProgramListLink: Optional[str] = None
+    FileListLink: Optional[str] = None
+    MessagingProgramListLink: Optional[str] = None
+    PrepaymentListLink: Optional[str] = None
+    TariffProfileListLink: Optional[str] = None
+    UsagePointListLink: Optional[str] = None
+
+
+@dataclass_json
+@dataclass
+class FunctionSetAssignmentsList:
+    """
+    List of FunctionSetAssignments resources.
+    """
+    href: Optional[str] = None
+    all: int = 0
+    results: int = 0
+    pollRate: int = 900
+    FunctionSetAssignments: List[FunctionSetAssignments] = field(default_factory=list)
+
+
+# =============================================================================
+# Response Models (回報狀態)
+# =============================================================================
+
+class ResponseStatusType(IntEnum):
+    """
+    Response status codes for DER control events.
+    
+    Reference: IEEE Std 2030.5-2023 Table 27
+    """
+    EVENT_RECEIVED = 0               # Event received
+    EVENT_STARTED = 1                # Event started (executed)
+    EVENT_COMPLETED = 2              # Event completed normally
+    EVENT_SUPERSEDED = 3             # Event superseded by higher priority
+    EVENT_CANCELLED_WITH_RANDOM = 4  # Event cancelled with randomization
+    EVENT_CANCELLED = 5              # Event cancelled
+    EVENT_EXPIRED = 6                # Event expired (not executed)
+    NO_USER_OPT_IN = 7               # User did not opt-in
+    NO_USER_OPT_OUT = 8              # User opted out
+    PARTIAL_OPT_OUT = 9              # Partial opt-out
+    EVENT_ABORTED_SERVER = 10        # Server aborted
+    EVENT_ABORTED_OVERSUB = 11       # Oversubscription
+    RESERVED = 12                    # Reserved for future use
+    EVENT_NOT_APPLICABLE = 255       # Event not applicable
+
+
+@dataclass_json
+@dataclass
+class DERControlResponse:
+    """
+    Response to a DERControl event.
+    
+    Reference: IEEE Std 2030.5-2023, Response resource
+    
+    Clients must send responses to the replyTo URI when 
+    responseRequired is specified in the event.
+    """
+    href: Optional[str] = None
+    
+    # Client identification (required)
+    endDeviceLFDI: str = ""                           # 40 hex chars
+    
+    # Response status
+    status: int = ResponseStatusType.EVENT_RECEIVED   # ResponseStatusType
+    
+    # Event identification
+    subject: str = ""                                 # mRID of the DERControl
+    
+    # Timestamp
+    createdDateTime: int = 0                          # Unix timestamp
+
+
+@dataclass_json
+@dataclass
+class ResponseSet:
+    """
+    Response Set for grouping responses.
+    """
+    href: Optional[str] = None
+    mRID: Optional[str] = None
+    description: Optional[str] = None
+    version: int = 0
+    ResponseListLink: Optional[str] = None
+
+
+@dataclass_json
+@dataclass
+class ResponseSetList:
+    """
+    List of ResponseSet resources.
+    """
+    href: Optional[str] = None
+    all: int = 0
+    results: int = 0
+    ResponseSet: List[ResponseSet] = field(default_factory=list)
+
+
+# =============================================================================
+# DefaultDERControl Model
+# =============================================================================
+
+@dataclass_json
+@dataclass
+class DefaultDERControl:
+    """
+    Default DER Control settings.
+    
+    Reference: IEEE Std 2030.5-2023, DefaultDERControl
+    
+    Applied when no active DERControl events are present.
+    """
+    href: Optional[str] = None
+    mRID: Optional[str] = None
+    description: Optional[str] = None
+    version: int = 0
+    
+    # Default control parameters
+    DERControlBase: Optional[DERControlBase] = None
+    
+    # Ramp rate settings
+    setGradW: Optional[int] = None                    # Default active power ramp rate

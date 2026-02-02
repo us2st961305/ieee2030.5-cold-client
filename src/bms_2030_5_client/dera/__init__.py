@@ -19,6 +19,12 @@ from bms_2030_5_client.dera.poller import (
     DERControlPollerConfig,
     DERControlIntegration,
 )
+from bms_2030_5_client.dera.der_client import (
+    DERClient,
+    DERClientConfig,
+    TrackedProgram,
+    TrackedControl,
+)
 
 __all__ = [
     "DERAvailabilityAdapter",
@@ -34,5 +40,10 @@ __all__ = [
     "DERControlPoller",
     "DERControlPollerConfig",
     "DERControlIntegration",
+    # DER Client (Full Implementation)
+    "DERClient",
+    "DERClientConfig",
+    "TrackedProgram",
+    "TrackedControl",
 ]
 

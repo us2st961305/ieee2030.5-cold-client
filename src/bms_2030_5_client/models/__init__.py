@@ -68,6 +68,16 @@ from bms_2030_5_client.models.ieee2030_5_models import (
     DERControlList,
     DERProgram,
     DERProgramList,
+    # FSA models
+    FunctionSetAssignments,
+    FunctionSetAssignmentsList,
+    # Response models
+    ResponseStatusType,
+    DERControlResponse,
+    ResponseSet,
+    ResponseSetList,
+    # Default DER Control
+    DefaultDERControl,
 )
 
 __all__ = [
@@ -134,4 +144,15 @@ __all__ = [
     "DERControl",
     "DERControlList",
     "DERProgram",
-    "DERProgramList",]
+    "DERProgramList",
+    # FSA models
+    "FunctionSetAssignments",
+    "FunctionSetAssignmentsList",
+    # Response models
+    "ResponseStatusType",
+    "DERControlResponse",
+    "ResponseSet",
+    "ResponseSetList",
+    # Default DER Control
+    "DefaultDERControl",
+]
