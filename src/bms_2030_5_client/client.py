@@ -31,6 +31,12 @@ from bms_2030_5_client.protocols import (
     LOG_EVENT_CODE_DESCRIPTIONS,
     AlarmStatusType,
 )
+from bms_2030_5_client.dera import DERClient, DERClientConfig
+from bms_2030_5_client.power_control import (
+    SafePowerController,
+    PowerControlConfig,
+    PowerLimits,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +57,7 @@ class BMSClient:
         config: Config,
         auto_register: bool = True,
         enable_metering: bool = True,
+        enable_der_control: bool = True,
     ):
         """
         Initialize BMS Client.
@@ -59,10 +66,12 @@ class BMSClient:
             config: Configuration object
             auto_register: Automatically register with 2030.5 server
             enable_metering: Enable meter data upload (MirrorUsagePoint)
+            enable_der_control: Enable DER control polling (FSA/DERProgram/DERControl)
         """
         self.config = config
         self.auto_register = auto_register
         self.enable_metering = enable_metering
+        self.enable_der_control = enable_der_control
         
         # Initialize components
         self.modbus_client = ModbusBMSClient.from_config(config)
@@ -93,6 +102,10 @@ class BMSClient:
         self._last_soc: Optional[float] = None  # Last recorded SOC
         self._charge_accumulated: float = 0.0  # Accumulated charge % in current cycle
         self._discharge_accumulated: float = 0.0  # Accumulated discharge % in current cycle
+        
+        # DER Control components (initialized after connection)
+        self._der_client: Optional[DERClient] = None
+        self._power_controller: Optional[SafePowerController] = None
 
     @classmethod
     def from_config(cls, config_path: Union[str, Path]) -> "BMSClient":
@@ -233,6 +246,10 @@ class BMSClient:
         # Start battery status reporting to Supabase
         self._battery_status_task = asyncio.create_task(self._battery_status_loop())
 
+        # Start DER Control polling (FSA/DERProgram/DERControl)
+        if self.enable_der_control:
+            await self._start_der_control()
+
         logger.info("BMS Client started successfully")
 
     async def stop(self) -> None:
@@ -268,6 +285,12 @@ class BMSClient:
                 pass
             self._battery_status_task = None
 
+        # Stop DER Control
+        if self._der_client:
+            await self._der_client.stop()
+            self._der_client = None
+            logger.info("DER Control stopped")
+
         # Stop data collection
         await self.data_collector.stop()
 
@@ -276,6 +299,60 @@ class BMSClient:
         await self.ieee2030_5_client.disconnect()
 
         logger.info("BMS Client stopped")
+
+    async def _start_der_control(self) -> None:
+        """
+        Initialize and start DER Control polling.
+        
+        This enables:
+        - FSA (FunctionSetAssignments) discovery and monitoring
+        - DERProgram management with primacy handling
+        - DERControl event execution
+        - Response reporting
+        
+        ⚠️ Safety: Power control runs in simulation mode by default
+        """
+        try:
+            # Initialize SafePowerController (simulation mode by default)
+            power_config = PowerControlConfig.from_env()
+            self._power_controller = SafePowerController(power_config)
+            
+            logger.info(
+                f"SafePowerController initialized "
+                f"(simulation_mode={power_config.simulation_mode})"
+            )
+            
+            # Initialize DERClient config
+            der_config = DERClientConfig(
+                fsa_poll_interval_s=300.0,      # 5 minutes
+                program_poll_interval_s=60.0,   # 1 minute
+                control_poll_interval_s=30.0,   # 30 seconds
+                max_programs=6,
+                enable_randomization=True,
+            )
+            
+            # Initialize DERClient
+            self._der_client = DERClient(
+                http_client=self.ieee2030_5_client,
+                power_controller=self._power_controller,
+                config=der_config,
+            )
+            
+            # Start DERClient
+            await self._der_client.start()
+            logger.info(
+                f"DER Control started - "
+                f"FSA polling every {der_config.fsa_poll_interval_s}s, "
+                f"Control polling every {der_config.control_poll_interval_s}s"
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to start DER Control: {e}")
+            import traceback
+            traceback.print_exc()
+            # Don't fail the entire client if DER control fails
+            self._der_client = None
+            self._power_controller = None
 
     async def _reporting_loop(self) -> None:
         """

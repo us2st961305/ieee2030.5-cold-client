@@ -578,37 +578,173 @@ class LogEventCode(IntEnum):
     """
     Log event codes for DER alarms (Function Set = 11).
     
-    Maps directly to AlarmStatusType bit positions.
     Reference: IEEE Std 2030.5-2023, LogEventCode for DER
+    
+    Note: _RTN suffix indicates "Return to Normal" (故障已清除)
+    
+    Code mapping:
+    - Even codes (0x00, 0x02, ...) = Fault occurred (故障發生)
+    - Odd codes (0x01, 0x03, ...) = Fault cleared (故障已清除/RTN)
     """
-    # DER Fault codes (matching alarmStatus bit positions)
-    DER_FAULT_OVER_CURRENT = 0       # Bit 0: 過電流故障
-    DER_FAULT_OVER_VOLTAGE = 1       # Bit 1: 過電壓故障
-    DER_FAULT_UNDER_VOLTAGE = 2      # Bit 2: 欠壓故障
-    DER_FAULT_OVER_FREQUENCY = 3     # Bit 3: 過頻率故障
-    DER_FAULT_UNDER_FREQUENCY = 4    # Bit 4: 欠頻率故障
-    DER_FAULT_VOLTAGE_IMBALANCE = 5  # Bit 5: 電壓不平衡故障
-    DER_FAULT_CURRENT_IMBALANCE = 6  # Bit 6: 電流不平衡故障
-    DER_FAULT_EMERGENCY_LOCAL = 7    # Bit 7: 在地緊急故障
-    DER_FAULT_EMERGENCY_REMOTE = 8   # Bit 8: 遠端緊急故障
-    DER_FAULT_LOW_POWER_INPUT = 9    # Bit 9: 低功率輸入故障
-    DER_FAULT_PHASE_ROTATION = 10    # Bit 10: 相序旋轉故障
-    # Cleared events (use 128+ to indicate alarm cleared)
-    DER_FAULT_CLEARED = 128          # Generic fault cleared
+    # DER Fault codes (based on provided specification table)
+    DER_FAULT_OVER_CURRENT = 0x00           # 過電流故障（通常需停機或重啟）
+    DER_FAULT_OVER_CURRENT_RTN = 0x01       # 過電流故障已清除
+    DER_FAULT_OVER_VOLTAGE = 0x02           # 過電壓故障
+    DER_FAULT_OVER_VOLTAGE_RTN = 0x03       # 過電壓故障已清除
+    DER_FAULT_UNDER_VOLTAGE = 0x04          # 低電壓故障
+    DER_FAULT_UNDER_VOLTAGE_RTN = 0x05      # 低電壓故障已清除
+    DER_FAULT_OVER_FREQUENCY = 0x06         # 過頻率故障
+    DER_FAULT_OVER_FREQUENCY_RTN = 0x07     # 過頻率故障已清除
+    DER_FAULT_UNDER_FREQUENCY = 0x08        # 低頻率故障
+    DER_FAULT_UNDER_FREQUENCY_RTN = 0x09    # 低頻率故障已清除
+    DER_FAULT_VOLTAGE_IMBALANCE = 0x0A      # 電壓不平衡故障
+    DER_FAULT_VOLTAGE_IMBALANCE_RTN = 0x0B  # 電壓不平衡故障已清除
+    DER_FAULT_CURRENT_IMBALANCE = 0x0C      # 電流不平衡故障
+    DER_FAULT_CURRENT_IMBALANCE_RTN = 0x0D  # 電流不平衡故障已清除
+    DER_FAULT_EMERGENCY_LOCAL = 0x0E        # 本地緊急狀況故障
+    DER_FAULT_EMERGENCY_LOCAL_RTN = 0x0F    # 本地緊急狀況已清除
+    DER_FAULT_EMERGENCY_REMOTE = 0x10       # 遠端緊急狀況故障
+    DER_FAULT_EMERGENCY_REMOTE_RTN = 0x11   # 遠端緊急狀況已清除
+    DER_FAULT_LOW_POWER_INPUT = 0x12        # 低功率輸入故障
+    DER_FAULT_LOW_POWER_INPUT_RTN = 0x13    # 低功率輸入故障已清除
+    DER_FAULT_PHASE_ROTATION = 0x14         # 相序旋轉錯誤故障
+    DER_FAULT_PHASE_ROTATION_RTN = 0x15     # 相序旋轉錯誤已清除
 
 
 # LogEvent code descriptions for logging
 LOG_EVENT_CODE_DESCRIPTIONS: Dict[int, str] = {
-    LogEventCode.DER_FAULT_OVER_CURRENT: "Over current fault detected",
-    LogEventCode.DER_FAULT_OVER_VOLTAGE: "Over voltage fault detected",
-    LogEventCode.DER_FAULT_UNDER_VOLTAGE: "Under voltage fault detected",
-    LogEventCode.DER_FAULT_OVER_FREQUENCY: "Over frequency fault detected",
-    LogEventCode.DER_FAULT_UNDER_FREQUENCY: "Under frequency fault detected",
-    LogEventCode.DER_FAULT_VOLTAGE_IMBALANCE: "Voltage imbalance fault detected",
-    LogEventCode.DER_FAULT_CURRENT_IMBALANCE: "Current imbalance fault detected",
-    LogEventCode.DER_FAULT_EMERGENCY_LOCAL: "Local emergency fault detected",
-    LogEventCode.DER_FAULT_EMERGENCY_REMOTE: "Remote emergency fault detected",
-    LogEventCode.DER_FAULT_LOW_POWER_INPUT: "Low power input fault detected",
-    LogEventCode.DER_FAULT_PHASE_ROTATION: "Phase rotation fault detected",
-    LogEventCode.DER_FAULT_CLEARED: "Fault cleared",
+    LogEventCode.DER_FAULT_OVER_CURRENT: "Over current fault detected (過電流故障)",
+    LogEventCode.DER_FAULT_OVER_CURRENT_RTN: "Over current fault cleared (過電流故障已清除)",
+    LogEventCode.DER_FAULT_OVER_VOLTAGE: "Over voltage fault detected (過電壓故障)",
+    LogEventCode.DER_FAULT_OVER_VOLTAGE_RTN: "Over voltage fault cleared (過電壓故障已清除)",
+    LogEventCode.DER_FAULT_UNDER_VOLTAGE: "Under voltage fault detected (低電壓故障)",
+    LogEventCode.DER_FAULT_UNDER_VOLTAGE_RTN: "Under voltage fault cleared (低電壓故障已清除)",
+    LogEventCode.DER_FAULT_OVER_FREQUENCY: "Over frequency fault detected (過頻率故障)",
+    LogEventCode.DER_FAULT_OVER_FREQUENCY_RTN: "Over frequency fault cleared (過頻率故障已清除)",
+    LogEventCode.DER_FAULT_UNDER_FREQUENCY: "Under frequency fault detected (低頻率故障)",
+    LogEventCode.DER_FAULT_UNDER_FREQUENCY_RTN: "Under frequency fault cleared (低頻率故障已清除)",
+    LogEventCode.DER_FAULT_VOLTAGE_IMBALANCE: "Voltage imbalance fault detected (電壓不平衡故障)",
+    LogEventCode.DER_FAULT_VOLTAGE_IMBALANCE_RTN: "Voltage imbalance fault cleared (電壓不平衡故障已清除)",
+    LogEventCode.DER_FAULT_CURRENT_IMBALANCE: "Current imbalance fault detected (電流不平衡故障)",
+    LogEventCode.DER_FAULT_CURRENT_IMBALANCE_RTN: "Current imbalance fault cleared (電流不平衡故障已清除)",
+    LogEventCode.DER_FAULT_EMERGENCY_LOCAL: "Local emergency fault detected (本地緊急狀況故障)",
+    LogEventCode.DER_FAULT_EMERGENCY_LOCAL_RTN: "Local emergency fault cleared (本地緊急狀況已清除)",
+    LogEventCode.DER_FAULT_EMERGENCY_REMOTE: "Remote emergency fault detected (遠端緊急狀況故障)",
+    LogEventCode.DER_FAULT_EMERGENCY_REMOTE_RTN: "Remote emergency fault cleared (遠端緊急狀況已清除)",
+    LogEventCode.DER_FAULT_LOW_POWER_INPUT: "Low power input fault detected (低功率輸入故障)",
+    LogEventCode.DER_FAULT_LOW_POWER_INPUT_RTN: "Low power input fault cleared (低功率輸入故障已清除)",
+    LogEventCode.DER_FAULT_PHASE_ROTATION: "Phase rotation fault detected (相序旋轉錯誤故障)",
+    LogEventCode.DER_FAULT_PHASE_ROTATION_RTN: "Phase rotation fault cleared (相序旋轉錯誤已清除)",
 }
+
+
+# =============================================================================
+# AlarmStatusType to LogEventCode Mapping
+# =============================================================================
+
+# Mapping from AlarmStatusType bit position to LogEventCode
+# Key: AlarmStatusType bit flag, Value: (fault_code, rtn_code)
+ALARM_TO_LOG_EVENT_MAP: Dict[int, tuple[int, int]] = {
+    AlarmStatusType.DER_FAULT_OVER_CURRENT: (
+        LogEventCode.DER_FAULT_OVER_CURRENT,
+        LogEventCode.DER_FAULT_OVER_CURRENT_RTN
+    ),
+    AlarmStatusType.DER_FAULT_OVER_VOLTAGE: (
+        LogEventCode.DER_FAULT_OVER_VOLTAGE,
+        LogEventCode.DER_FAULT_OVER_VOLTAGE_RTN
+    ),
+    AlarmStatusType.DER_FAULT_UNDER_VOLTAGE: (
+        LogEventCode.DER_FAULT_UNDER_VOLTAGE,
+        LogEventCode.DER_FAULT_UNDER_VOLTAGE_RTN
+    ),
+    AlarmStatusType.DER_FAULT_OVER_FREQUENCY: (
+        LogEventCode.DER_FAULT_OVER_FREQUENCY,
+        LogEventCode.DER_FAULT_OVER_FREQUENCY_RTN
+    ),
+    AlarmStatusType.DER_FAULT_UNDER_FREQUENCY: (
+        LogEventCode.DER_FAULT_UNDER_FREQUENCY,
+        LogEventCode.DER_FAULT_UNDER_FREQUENCY_RTN
+    ),
+    AlarmStatusType.DER_FAULT_VOLTAGE_IMBALANCE: (
+        LogEventCode.DER_FAULT_VOLTAGE_IMBALANCE,
+        LogEventCode.DER_FAULT_VOLTAGE_IMBALANCE_RTN
+    ),
+    AlarmStatusType.DER_FAULT_CURRENT_IMBALANCE: (
+        LogEventCode.DER_FAULT_CURRENT_IMBALANCE,
+        LogEventCode.DER_FAULT_CURRENT_IMBALANCE_RTN
+    ),
+    AlarmStatusType.DER_FAULT_EMERGENCY_LOCAL: (
+        LogEventCode.DER_FAULT_EMERGENCY_LOCAL,
+        LogEventCode.DER_FAULT_EMERGENCY_LOCAL_RTN
+    ),
+    AlarmStatusType.DER_FAULT_EMERGENCY_REMOTE: (
+        LogEventCode.DER_FAULT_EMERGENCY_REMOTE,
+        LogEventCode.DER_FAULT_EMERGENCY_REMOTE_RTN
+    ),
+    AlarmStatusType.DER_FAULT_LOW_POWER_INPUT: (
+        LogEventCode.DER_FAULT_LOW_POWER_INPUT,
+        LogEventCode.DER_FAULT_LOW_POWER_INPUT_RTN
+    ),
+    AlarmStatusType.DER_FAULT_PHASE_ROTATION: (
+        LogEventCode.DER_FAULT_PHASE_ROTATION,
+        LogEventCode.DER_FAULT_PHASE_ROTATION_RTN
+    ),
+}
+
+
+def alarm_status_to_log_events(
+    current_alarm: int,
+    previous_alarm: int
+) -> List[tuple[int, bool]]:
+    """
+    Compare alarm status and generate LogEvent codes for changes.
+    
+    Args:
+        current_alarm: Current AlarmStatusType bit field
+        previous_alarm: Previous AlarmStatusType bit field
+        
+    Returns:
+        List of (LogEventCode, is_fault) tuples.
+        is_fault=True means fault occurred, False means fault cleared (RTN)
+    """
+    events: List[tuple[int, bool]] = []
+    
+    for alarm_bit, (fault_code, rtn_code) in ALARM_TO_LOG_EVENT_MAP.items():
+        current_set = bool(current_alarm & alarm_bit)
+        previous_set = bool(previous_alarm & alarm_bit)
+        
+        if current_set and not previous_set:
+            # Fault newly occurred
+            events.append((fault_code, True))
+        elif not current_set and previous_set:
+            # Fault cleared (RTN)
+            events.append((rtn_code, False))
+    
+    return events
+
+
+def get_log_event_description(code: int) -> str:
+    """
+    Get human-readable description for a LogEventCode.
+    
+    Args:
+        code: LogEventCode value
+        
+    Returns:
+        Description string, or "Unknown event" if not found
+    """
+    return LOG_EVENT_CODE_DESCRIPTIONS.get(code, f"Unknown event (code: 0x{code:02X})")
+
+
+def is_rtn_event(code: int) -> bool:
+    """
+    Check if a LogEventCode is a Return-to-Normal (RTN) event.
+    
+    Args:
+        code: LogEventCode value
+        
+    Returns:
+        True if this is an RTN (fault cleared) event
+    """
+    # RTN events have odd codes (0x01, 0x03, 0x05, ...)
+    return bool(code & 0x01)

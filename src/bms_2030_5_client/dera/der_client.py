@@ -309,10 +309,16 @@ class DERClient:
             logger.debug("No FunctionSetAssignmentsListLink available")
             return
         
+        # 處理 Link 物件或字串
+        fsa_href = fsa_link.href if hasattr(fsa_link, 'href') else fsa_link
+        if not fsa_href:
+            logger.debug("No FunctionSetAssignmentsListLink href available")
+            return
+        
         try:
             # 取得 FSA 列表
             fsa_list = await self.http_client._get(
-                fsa_link,
+                fsa_href,
                 FunctionSetAssignmentsList
             )
             

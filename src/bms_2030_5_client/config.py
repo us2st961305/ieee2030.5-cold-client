@@ -19,7 +19,7 @@ class IEEE2030_5Config:
     cert_file: str = "certs/client.crt"
     key_file: str = "certs/client.pem"
     ca_file: str = "certs/ca.crt"
-    poll_rate: int = 30
+    poll_rate: int = 180  # 3 minutes (DERStatus & Metering upload interval)
     device_id: str = "bms-client-001"
     pin: int = 12345
 
