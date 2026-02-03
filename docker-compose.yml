@@ -21,6 +21,11 @@ services:
       # Modbus BMS Configuration
       - MODBUS_HOST=${MODBUS_HOST:-192.168.1.100}
       - MODBUS_PORT=${MODBUS_PORT:-502}
+      # ⚠️ Power Control Safety - MUST be true for development/testing
+      - POWER_CONTROL_SIMULATION=true
+      # Disable production mode access
+      - POWER_CONTROL_CONFIRM_PRODUCTION=
+      - POWER_CONTROL_SAFETY_TOKEN=
     
     # Mount configuration file
     volumes:
