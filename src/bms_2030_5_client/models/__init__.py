@@ -88,7 +88,6 @@ from bms_2030_5_client.models.ieee2030_5_models import (
     DERControlModesType,
     DERControlResponseFull,
 )
-)
 
 __all__ = [
     # BMS models
