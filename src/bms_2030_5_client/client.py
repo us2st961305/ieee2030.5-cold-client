@@ -37,6 +37,16 @@ from bms_2030_5_client.power_control import (
     PowerControlConfig,
     PowerLimits,
 )
+from bms_2030_5_client.subscription import (
+    NotificationServer,
+    NotificationServerConfig,
+    SubscriptionManager,
+    SubscriptionManagerConfig,
+    NotificationHandler,
+    NotificationHandlerConfig,
+    TimeSyncClient,
+    TimeSyncConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +60,7 @@ class BMSClient:
     - IEEE 2030.5 communication with utility server
     - Data transformation between BMS and DER models
     - Periodic status reporting
+    - Push-based DER control via subscription/notification (optional)
     """
 
     def __init__(
@@ -58,6 +69,9 @@ class BMSClient:
         auto_register: bool = True,
         enable_metering: bool = True,
         enable_der_control: bool = True,
+        enable_subscription: Optional[bool] = None,
+        notification_host: Optional[str] = None,
+        notification_port: Optional[int] = None,
     ):
         """
         Initialize BMS Client.
@@ -67,11 +81,31 @@ class BMSClient:
             auto_register: Automatically register with 2030.5 server
             enable_metering: Enable meter data upload (MirrorUsagePoint)
             enable_der_control: Enable DER control polling (FSA/DERProgram/DERControl)
+            enable_subscription: Enable push-based subscription/notification for DER control.
+                                 If None, uses config.subscription.enabled
+            notification_host: Host for notification server (when subscription enabled).
+                               If None, uses config.subscription.notification_host
+            notification_port: Port for notification server (when subscription enabled).
+                               If None, uses config.subscription.notification_port
         """
         self.config = config
         self.auto_register = auto_register
         self.enable_metering = enable_metering
         self.enable_der_control = enable_der_control
+        
+        # Use config values as defaults for subscription settings
+        self._enable_subscription = (
+            enable_subscription if enable_subscription is not None 
+            else config.subscription.enabled
+        )
+        self._notification_host = (
+            notification_host if notification_host is not None 
+            else config.subscription.notification_host
+        )
+        self._notification_port = (
+            notification_port if notification_port is not None 
+            else config.subscription.notification_port
+        )
         
         # Initialize components
         self.modbus_client = ModbusBMSClient.from_config(config)
@@ -106,6 +140,12 @@ class BMSClient:
         # DER Control components (initialized after connection)
         self._der_client: Optional[DERClient] = None
         self._power_controller: Optional[SafePowerController] = None
+        
+        # Subscription/Notification components (initialized when enabled)
+        self._notification_server: Optional[NotificationServer] = None
+        self._subscription_manager: Optional[SubscriptionManager] = None
+        self._notification_handler: Optional[NotificationHandler] = None
+        self._time_sync_client: Optional[TimeSyncClient] = None
 
     @classmethod
     def from_config(cls, config_path: Union[str, Path]) -> "BMSClient":
@@ -246,8 +286,12 @@ class BMSClient:
         # Start battery status reporting to Supabase
         self._battery_status_task = asyncio.create_task(self._battery_status_loop())
 
-        # Start DER Control polling (FSA/DERProgram/DERControl)
-        if self.enable_der_control:
+        # Start DER Control - either subscription-based or polling-based
+        if self._enable_subscription:
+            # Push-based: Use subscription/notification for near real-time control
+            await self._start_subscription_control()
+        elif self.enable_der_control:
+            # Pull-based: Use polling for DER control
             await self._start_der_control()
 
         logger.info("BMS Client started successfully")
@@ -290,6 +334,9 @@ class BMSClient:
             await self._der_client.stop()
             self._der_client = None
             logger.info("DER Control stopped")
+
+        # Stop subscription components
+        await self._stop_subscription_control()
 
         # Stop data collection
         await self.data_collector.stop()
@@ -353,6 +400,117 @@ class BMSClient:
             # Don't fail the entire client if DER control fails
             self._der_client = None
             self._power_controller = None
+
+    async def _start_subscription_control(self) -> None:
+        """
+        Initialize and start IEEE 2030.5 subscription-based control.
+        
+        This enables:
+        - Push-based DERControl notifications via HTTPS server
+        - Subscription chain: FSA → DERProgram → DERControl
+        - Time synchronization (mandatory polling for /tm)
+        - Automatic subscription renewal
+        
+        ⚠️ Safety: Power control runs in simulation mode by default
+        """
+        try:
+            # Initialize SafePowerController (simulation mode by default)
+            power_config = PowerControlConfig.from_env()
+            self._power_controller = SafePowerController(power_config)
+            
+            logger.info(
+                f"SafePowerController initialized "
+                f"(simulation_mode={power_config.simulation_mode})"
+            )
+            
+            # Get TLS certificate paths from config
+            cert_file = self.config.ieee2030_5.cert_file
+            key_file = self.config.ieee2030_5.key_file
+            ca_file = self.config.ieee2030_5.ca_file
+            
+            # Initialize NotificationServer
+            self._notification_server = NotificationServer(
+                host=self._notification_host,
+                port=self._notification_port,
+                cert_file=cert_file,
+                key_file=key_file,
+                ca_file=ca_file,
+            )
+            
+            # Start notification server
+            await self._notification_server.start()
+            
+            # Build notification URI for server to send notifications to us
+            # Use hostname/IP that server can reach
+            notification_uri = f"https://{self._notification_host}:{self._notification_port}/notification"
+            
+            # Initialize SubscriptionManager
+            self._subscription_manager = SubscriptionManager(
+                http_client=self.ieee2030_5_client,
+                notification_uri=notification_uri,
+            )
+            
+            # Initialize NotificationHandler
+            self._notification_handler = NotificationHandler(
+                http_client=self.ieee2030_5_client,
+                power_controller=self._power_controller,
+            )
+            
+            # Register notification handler with server
+            self._notification_server.set_handler(
+                self._notification_handler.handle_notification
+            )
+            
+            # Initialize TimeSyncClient (mandatory polling - /tm cannot be subscribed)
+            server_url = self.config.ieee2030_5.server_url
+            self._time_sync_client = TimeSyncClient(
+                server_url=server_url,
+                http_client=self.ieee2030_5_client,
+                sync_interval=900,  # 15 minutes
+            )
+            
+            # Start time sync loop
+            await self._time_sync_client.start_sync_loop()
+            
+            # Setup subscription chain
+            await self._subscription_manager.setup_subscriptions()
+            
+            logger.info(
+                f"Subscription-based DER Control started - "
+                f"Notification server on {self._notification_host}:{self._notification_port}"
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to start subscription control: {e}")
+            import traceback
+            traceback.print_exc()
+            # Clean up partial initialization
+            await self._stop_subscription_control()
+
+    async def _stop_subscription_control(self) -> None:
+        """Stop subscription-based control components."""
+        # Stop time sync
+        if self._time_sync_client:
+            await self._time_sync_client.stop_sync_loop()
+            self._time_sync_client = None
+            logger.debug("Time sync client stopped")
+        
+        # Cleanup subscriptions
+        if self._subscription_manager:
+            await self._subscription_manager.cleanup()
+            self._subscription_manager = None
+            logger.debug("Subscription manager stopped")
+        
+        # Stop notification server
+        if self._notification_server:
+            await self._notification_server.stop()
+            self._notification_server = None
+            logger.debug("Notification server stopped")
+        
+        # Clear handler
+        self._notification_handler = None
+        
+        logger.info("Subscription control components stopped")
 
     async def _reporting_loop(self) -> None:
         """

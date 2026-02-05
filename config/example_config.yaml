@@ -33,3 +33,30 @@ logging:
   level: "INFO"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   file: "logs/bms_client.log"
+
+# 訂閱/通知設定 (Subscription/Notification Configuration)
+# Reference: IEEE Std 2030.5-2023, Clause 8.9
+subscription:
+  # 是否啟用訂閱模式 (推送式 DER 控制)
+  # Enable subscription mode (push-based DER control)
+  enabled: false
+  
+  # 通知服務器監聽地址 (0.0.0.0 = 所有介面)
+  # Notification server listen address (0.0.0.0 = all interfaces)
+  notification_host: "0.0.0.0"
+  
+  # 通知服務器監聽端口
+  # Notification server listen port
+  notification_port: 8443
+  
+  # 伺服器可達的公開 URI (如果 NAT 環境)
+  # Public URI reachable by server (if behind NAT)
+  # public_uri: "https://192.168.1.50:8443/notification"
+  
+  # 時間同步間隔 (秒) - /tm 不可訂閱，必須輪詢
+  # Time sync interval (seconds) - /tm cannot be subscribed
+  time_sync_interval: 900  # 15 minutes
+  
+  # 訂閱續訂間隔 (秒)
+  # Subscription renewal interval (seconds)
+  subscription_renewal_interval: 86400  # 24 hours

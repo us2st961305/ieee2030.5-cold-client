@@ -54,12 +54,32 @@ class LoggingConfig:
 
 
 @dataclass
+class SubscriptionConfig:
+    """
+    IEEE 2030.5 Subscription/Notification configuration.
+    
+    When enabled, the client uses push-based notifications instead of polling
+    for DERControl updates.
+    
+    Reference: IEEE Std 2030.5-2023, Clause 8.9
+    """
+    enabled: bool = False
+    notification_host: str = "0.0.0.0"  # Listen on all interfaces
+    notification_port: int = 8443
+    # Public URI for server to send notifications (must be reachable by server)
+    public_uri: Optional[str] = None  # If None, uses notification_host:notification_port
+    time_sync_interval: int = 900  # 15 minutes (mandatory polling for /tm)
+    subscription_renewal_interval: int = 86400  # 24 hours
+
+
+@dataclass
 class Config:
     """Main configuration class."""
     ieee2030_5: IEEE2030_5Config = field(default_factory=IEEE2030_5Config)
     modbus: ModbusConfig = field(default_factory=ModbusConfig)
     registers: RegisterConfig = field(default_factory=RegisterConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    subscription: SubscriptionConfig = field(default_factory=SubscriptionConfig)
 
     @classmethod
     def from_yaml(cls, path: Union[str, Path]) -> "Config":
@@ -91,6 +111,9 @@ class Config:
 
         if "logging" in data:
             config.logging = LoggingConfig(**data["logging"])
+
+        if "subscription" in data:
+            config.subscription = SubscriptionConfig(**data["subscription"])
 
         return config
 
@@ -133,6 +156,14 @@ class Config:
                 "level": self.logging.level,
                 "format": self.logging.format,
                 "file": self.logging.file,
+            },
+            "subscription": {
+                "enabled": self.subscription.enabled,
+                "notification_host": self.subscription.notification_host,
+                "notification_port": self.subscription.notification_port,
+                "public_uri": self.subscription.public_uri,
+                "time_sync_interval": self.subscription.time_sync_interval,
+                "subscription_renewal_interval": self.subscription.subscription_renewal_interval,
             },
         }
 
