@@ -283,14 +283,14 @@ class BMSDataCollector:
     def __init__(
         self,
         client: ModbusBMSClient,
-        refresh_interval: float = 0.5,
+        refresh_interval: float = 60.0,
     ):
         """
         Initialize data collector.
         
         Args:
             client: ModbusBMSClient instance
-            refresh_interval: Data refresh interval in seconds
+            refresh_interval: Data refresh interval in seconds (default: 60s / 1 minute)
         """
         self.client = client
         self.refresh_interval = refresh_interval

@@ -32,7 +32,7 @@ class ModbusConfig:
     unit_id: int = 1
     timeout: float = 5.0
     rack_count: int = 4
-    refresh_interval: float = 0.5
+    refresh_interval: float = 60.0
 
 
 @dataclass

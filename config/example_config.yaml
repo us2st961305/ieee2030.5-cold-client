@@ -16,7 +16,7 @@ modbus:
   unit_id: 1
   timeout: 5.0
   rack_count: 4
-  refresh_interval: 0.5  # 秒
+  refresh_interval: 60  # 秒（每 1 分鐘）
 
 # 系統暫存器設定
 registers:
