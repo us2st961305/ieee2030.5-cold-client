@@ -1136,3 +1136,202 @@ class DefaultDERControl:
     
     # Ramp rate settings
     setGradW: Optional[int] = None                    # Default active power ramp rate
+
+
+# =============================================================================
+# Subscription / Notification Models (訂閱/通知模型)
+# =============================================================================
+
+class SubscriptionEncodingType(IntEnum):
+    """
+    Subscription encoding types.
+    
+    Reference: IEEE Std 2030.5-2023, Subscription resource
+    """
+    XML = 0     # application/sep+xml
+    EXI = 1     # application/sep-exi
+
+
+class NotificationStatusType(IntEnum):
+    """
+    Notification status codes.
+    
+    Reference: IEEE Std 2030.5-2023 Table 14
+    """
+    DEFAULT = 0                     # Subscription valid
+    SUBSCRIPTION_CANCELLED = 1      # Subscription cancelled by server
+    SUBSCRIPTION_SUPERSEDED = 2     # Subscription replaced
+    RESOURCE_MOVED = 3              # subscribed resource moved
+    RESOURCE_DELETED = 4            # subscribed resource removed
+
+
+@dataclass_json
+@dataclass
+class Subscription:
+    """
+    IEEE 2030.5 Subscription resource.
+    
+    Reference: IEEE Std 2030.5-2023, Subscription resource (Clause 8.9)
+    
+    Used to subscribe to resource changes and receive push notifications.
+    
+    Example XML:
+        <Subscription xmlns="urn:ieee:std:2030.5:ns" schemaVer="2.2">
+            <subscribedResource>/derp/1/derc</subscribedResource>
+            <notificationURI>https://client:8443/notify</notificationURI>
+            <encoding>0</encoding>
+            <level>+S2</level>
+            <limit>10</limit>
+        </Subscription>
+    """
+    href: Optional[str] = None
+    
+    # Required fields
+    subscribedResource: str = ""              # Resource path to subscribe
+    notificationURI: str = ""                 # Client endpoint for notifications
+    encoding: int = SubscriptionEncodingType.XML  # 0=XML, 1=EXI
+    level: str = "+S2"                        # Schema extension level
+    limit: int = 10                           # Max resources per notification (0=all)
+    
+    # Optional
+    newResourceURI: Optional[str] = None      # For create notifications
+    
+    # Set by server
+    mRID: Optional[str] = None
+
+
+@dataclass_json
+@dataclass
+class SubscriptionList:
+    """
+    List of Subscription resources.
+    """
+    href: Optional[str] = None
+    all: int = 0
+    results: int = 0
+    pollRate: int = 900
+    Subscription: List[Subscription] = field(default_factory=list)
+
+
+@dataclass_json
+@dataclass
+class Notification:
+    """
+    IEEE 2030.5 Notification resource.
+    
+    Reference: IEEE Std 2030.5-2023, Notification resource (Clause 8.9)
+    
+    Sent by server when a subscribed resource changes.
+    
+    Example XML:
+        <Notification xmlns="urn:ieee:std:2030.5:ns">
+            <subscribedResource>/derp/1/derc</subscribedResource>
+            <newResourceURI>/derp/1/derc/5</newResourceURI>
+            <status>0</status>
+            <Resource xsi:type="DERControl">
+                <!-- Embedded resource content -->
+            </Resource>
+        </Notification>
+    """
+    # Which resource triggered the notification
+    subscribedResource: str = ""
+    
+    # URI of the new/changed resource (if applicable)
+    newResourceURI: Optional[str] = None
+    
+    # Notification status (0 = subscription valid)
+    status: int = NotificationStatusType.DEFAULT
+    
+    # The embedded resource (parsed separately based on xsi:type)
+    # Type is determined by subscribed resource path
+    Resource: Optional[str] = None            # Raw XML or parsed object
+
+
+@dataclass_json
+@dataclass
+class NotificationList:
+    """
+    List of Notification resources.
+    """
+    href: Optional[str] = None
+    all: int = 0
+    results: int = 0
+    Notification: List[Notification] = field(default_factory=list)
+
+
+# =============================================================================
+# DERControlResponse Extended (完整回應欄位)
+# =============================================================================
+
+class DERControlModesType(IntEnum):
+    """
+    DER Control modes bitmap for modesResponded field.
+    
+    Reference: IEEE Std 2030.5-2023, DERControlBase modes
+    """
+    OP_MOD_CONNECT = 0x0001           # Bit 0: opModConnect
+    OP_MOD_ENERGIZE = 0x0002          # Bit 1: opModEnergize
+    OP_MOD_FIXED_PF_ABSORB_W = 0x0004 # Bit 2: opModFixedPFAbsorbW
+    OP_MOD_FIXED_PF_INJECT_W = 0x0008 # Bit 3: opModFixedPFInjectW
+    OP_MOD_FIXED_VAR = 0x0010         # Bit 4: opModFixedVar
+    OP_MOD_FIXED_W = 0x0020           # Bit 5: opModFixedW
+    OP_MOD_FREQ_DROOP = 0x0040        # Bit 6: opModFreqDroop
+    OP_MOD_FREQ_WATT = 0x0080         # Bit 7: opModFreqWatt
+    OP_MOD_HFRT_MAY_TRIP = 0x0100     # Bit 8: opModHFRTMayTrip
+    OP_MOD_HFRT_MUST_TRIP = 0x0200    # Bit 9: opModHFRTMustTrip
+    OP_MOD_HVRT_MAY_TRIP = 0x0400     # Bit 10: opModHVRTMayTrip
+    OP_MOD_HVRT_MUST_TRIP = 0x0800    # Bit 11: opModHVRTMustTrip
+    OP_MOD_LFRT_MAY_TRIP = 0x1000     # Bit 12: opModLFRTMayTrip
+    OP_MOD_MAX_LIM_W = 0x2000         # Bit 13: opModMaxLimW
+    OP_MOD_TARGET_VAR = 0x4000        # Bit 14: opModTargetVar
+    OP_MOD_TARGET_W = 0x8000          # Bit 15: opModTargetW
+    OP_MOD_VOLT_VAR = 0x10000         # Bit 16: opModVoltVar
+    OP_MOD_VOLT_WATT = 0x20000        # Bit 17: opModVoltWatt
+    OP_MOD_WATT_PF = 0x40000          # Bit 18: opModWattPF
+    OP_MOD_WATT_VAR = 0x80000         # Bit 19: opModWattVar
+
+
+@dataclass_json
+@dataclass
+class DERControlResponseFull:
+    """
+    Full DERControlResponse with all required fields.
+    
+    Reference: IEEE Std 2030.5-2023, DERControlResponse
+    
+    Must be POST to the DERControl's replyTo URI when responseRequired is set.
+    
+    Example XML:
+        <DERControlResponse xmlns="urn:ieee:std:2030.5:ns">
+            <createdDateTime>1706900123</createdDateTime>
+            <endDeviceLFDI>C7A14F7DA4E51A12ED9E3BCD6D818A5250462829</endDeviceLFDI>
+            <status>1</status>
+            <subject>A1B2C3D4E5F6...</subject>
+            <modesResponded>0001</modesResponded>
+        </DERControlResponse>
+    """
+    # Required: Response creation timestamp (Unix time)
+    createdDateTime: int = 0
+    
+    # Required: Client's Long-Form Device Identifier (40 hex chars)
+    endDeviceLFDI: str = ""
+    
+    # Required: Response status code
+    status: int = ResponseStatusType.EVENT_RECEIVED
+    
+    # Required: mRID of the DERControl being responded to
+    subject: str = ""
+    
+    # Required: Bitmap indicating which control modes this response applies to
+    # HexBinary32 (8 hex chars, e.g., "00000001" for opModConnect)
+    modesResponded: str = "00000000"
+    
+    @staticmethod
+    def modes_to_hex(modes: int) -> str:
+        """Convert modes bitmap to HexBinary32 string."""
+        return f"{modes:08X}"
+    
+    @staticmethod
+    def hex_to_modes(hex_str: str) -> int:
+        """Convert HexBinary32 string to modes bitmap."""
+        return int(hex_str, 16)
