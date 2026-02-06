@@ -428,21 +428,37 @@ class BMSClient:
             key_file = self.config.ieee2030_5.key_file
             ca_file = self.config.ieee2030_5.ca_file
             
-            # Initialize NotificationServer
-            self._notification_server = NotificationServer(
+            # Check if using public_uri (e.g., Tailscale Funnel)
+            # If so, disable TLS as the reverse proxy handles TLS termination
+            use_tls = self.config.subscription.public_uri is None
+            
+            # Build notification server config
+            notification_config = NotificationServerConfig(
                 host=self._notification_host,
                 port=self._notification_port,
                 cert_file=cert_file,
                 key_file=key_file,
                 ca_file=ca_file,
+                use_tls=use_tls,
             )
+            
+            # Initialize NotificationServer
+            self._notification_server = NotificationServer(notification_config)
             
             # Start notification server
             await self._notification_server.start()
             
             # Build notification URI for server to send notifications to us
-            # Use hostname/IP that server can reach
-            notification_uri = f"https://{self._notification_host}:{self._notification_port}/notification"
+            # Use public_uri (e.g., Tailscale Funnel) if configured, otherwise fallback to local
+            public_uri = self.config.subscription.public_uri
+            if public_uri:
+                # Use public URI (e.g., https://shulin1f25r.tailbd4dcc.ts.net)
+                # Ensure it ends with the notification endpoint
+                notification_uri = public_uri.rstrip('/') + "/notify"
+                logger.info(f"Using public notification URI: {notification_uri}")
+            else:
+                notification_uri = f"https://{self._notification_host}:{self._notification_port}/notify"
+                logger.info(f"Using local notification URI: {notification_uri}")
             
             # Initialize SubscriptionManager
             self._subscription_manager = SubscriptionManager(
@@ -453,20 +469,21 @@ class BMSClient:
             # Initialize NotificationHandler
             self._notification_handler = NotificationHandler(
                 http_client=self.ieee2030_5_client,
-                power_controller=self._power_controller,
+                subscription_manager=self._subscription_manager,
             )
             
             # Register notification handler with server
-            self._notification_server.set_handler(
+            self._notification_server.set_notification_handler(
                 self._notification_handler.handle_notification
             )
             
             # Initialize TimeSyncClient (mandatory polling - /tm cannot be subscribed)
-            server_url = self.config.ieee2030_5.server_url
+            time_sync_config = TimeSyncConfig(
+                sync_interval_s=self.config.subscription.time_sync_interval,
+            )
             self._time_sync_client = TimeSyncClient(
-                server_url=server_url,
                 http_client=self.ieee2030_5_client,
-                sync_interval=900,  # 15 minutes
+                config=time_sync_config,
             )
             
             # Start time sync loop

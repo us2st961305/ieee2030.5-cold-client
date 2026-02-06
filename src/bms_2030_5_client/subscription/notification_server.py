@@ -50,6 +50,9 @@ class NotificationServerConfig:
     # 需要客戶端憑證驗證 (雙向 TLS)
     require_client_cert: bool = True
     
+    # 是否啟用 TLS（當使用 Tailscale Funnel 等 reverse proxy 時可禁用）
+    use_tls: bool = True
+    
     # 服務器配置
     request_timeout_s: float = 30.0
 
@@ -279,12 +282,16 @@ class NotificationServer:
             self._handle_notification
         )
         
-        # 創建 SSL 上下文
-        try:
-            ssl_context = self._create_ssl_context()
-        except FileNotFoundError as e:
-            logger.warning(f"TLS certificates not found: {e}, running without TLS")
-            ssl_context = None
+        # 創建 SSL 上下文（僅在啟用 TLS 時）
+        ssl_context = None
+        if self.config.use_tls:
+            try:
+                ssl_context = self._create_ssl_context()
+            except FileNotFoundError as e:
+                logger.warning(f"TLS certificates not found: {e}, running without TLS")
+                ssl_context = None
+        else:
+            logger.info("TLS disabled (using reverse proxy for TLS termination)")
         
         # 啟動服務器
         self._runner = web.AppRunner(self._app)
