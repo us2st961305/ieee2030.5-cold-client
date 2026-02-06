@@ -69,6 +69,7 @@ class IEEE2030_5Client:
         cert_file: str,
         key_file: str,
         ca_file: str,
+        server_ca_file: str,
         dcap_path: str = "/dcap",
         device_id: str = "client",
     ):
@@ -80,6 +81,7 @@ class IEEE2030_5Client:
             cert_file: Path to client certificate
             key_file: Path to client private key
             ca_file: Path to CA certificate
+            server_ca_file: Path to server CA certificate for verification
             dcap_path: Device capability path
             device_id: Device identifier
         """
@@ -87,6 +89,7 @@ class IEEE2030_5Client:
         self.cert_file = Path(cert_file)
         self.key_file = Path(key_file)
         self.ca_file = Path(ca_file)
+        self.server_ca_file = Path(server_ca_file)
         self.dcap_path = dcap_path
         self.device_id = device_id
         
@@ -104,6 +107,7 @@ class IEEE2030_5Client:
             cert_file=config.ieee2030_5.cert_file,
             key_file=config.ieee2030_5.key_file,
             ca_file=config.ieee2030_5.ca_file,
+            server_ca_file=config.ieee2030_5.server_ca_file,
             dcap_path=config.ieee2030_5.dcap_path,
             device_id=config.ieee2030_5.device_id,
         )
@@ -175,6 +179,7 @@ class IEEE2030_5Client:
                 (self.cert_file, "Certificate"),
                 (self.key_file, "Private key"),
                 (self.ca_file, "CA certificate"),
+                (self.server_ca_file, "Server CA certificate"),
             ]:
                 if not path.exists():
                     raise AuthenticationError(f"{name} not found: {path}")
@@ -183,7 +188,7 @@ class IEEE2030_5Client:
             
             self._client = httpx.AsyncClient(
                 base_url=self.server_url,
-                verify=ssl.create_default_context(cafile="/app/certs/server_ca.crt"),
+                verify=ssl.create_default_context(cafile=str(self.server_ca_file)),
                 cert=(str(self.cert_file), str(self.key_file)),
                 timeout=30.0,
                 headers={
