@@ -1,0 +1,166 @@
+# ========================================
+# IEEE 2030.5 BMS Client - Example Configuration
+# ========================================
+# Copy this file to runtime.yaml and customize for your environment.
+#
+# Schema Version: 2.0.0
+# Reference: IEEE Std 2030.5™-2023
+
+# ----------------------------------------
+# PROFILES: IEEE 2030.5 Server Connections
+# ----------------------------------------
+profiles:
+  # Production server
+  - name: "production"
+    server_base_url: "https://sep.utility.example.com"
+    tls:
+      client_cert_path: "certs/prod/client.crt"
+      client_key_path: "certs/prod/client.key"
+      ca_bundle_path: "certs/prod/ca-bundle.crt"
+      verify_server: true
+    content_type_preference: "application/sep+xml"
+    device_id: "BESS-001"
+    pin: 12345
+  
+  # Development/Test server
+  - name: "development"
+    server_base_url: "https://localhost:7443"
+    tls:
+      client_cert_path: "certs/dev/client.crt"
+      client_key_path: "certs/dev/client.key"
+      ca_bundle_path: "certs/dev/ca.crt"
+      verify_server: false  # Allow self-signed certs for testing
+    content_type_preference: "application/sep+xml"
+    device_id: "BESS-DEV-001"
+    pin: 11111
+
+# ----------------------------------------
+# MODBUS: BMS Communication Settings
+# ----------------------------------------
+modbus:
+  mode: "tcp"
+  host: "192.168.1.100"
+  port: 502
+  unit_id: 1
+  timeout: 5.0
+  
+  defaults:
+    function_code_read: 3
+    function_code_write: 6
+  
+  rack_count: 4
+  
+  registers:
+    system:
+      base_address: 3999  # Doc: 4000
+      count: 100
+    rack:
+      base_address: 6999  # Doc: 7000
+      offset: 30
+      max_racks: 24
+
+# ----------------------------------------
+# POLL_TARGETS: Polling Configuration
+# ----------------------------------------
+poll_targets:
+  # Poll Target 1: DER Control (Power Setpoint)
+  # Fetches active power commands from the utility server
+  - id: "der_control_power"
+    name: "DER Active Power Control"
+    enabled: true
+    profile_name: "production"
+    method: "GET"
+    uri: "/edev/{edev}/der/1/derg/1/derp/1/derca"
+    interval_ms: 30000  # 30 seconds - responsive to grid commands
+    parse:
+      format: "sep_xml"
+      xpath: "//DERControl/DERControlBase/opModFixedW/value"
+    transform:
+      scale: 0.001      # Convert from milliwatts to watts
+      offset: 0
+      clamp_min: -100000  # -100 kW (discharge limit)
+      clamp_max: 100000   # +100 kW (charge limit)
+    modbus_write:
+      address: 4100     # Power setpoint register
+      datatype: "int16"
+      scale: 0.1        # Register uses 0.1 kW units
+      offset: 0
+
+  # Poll Target 2: Time Synchronization
+  # Mandatory per IEEE 2030.5 - keeps client time in sync
+  - id: "time_sync"
+    name: "Server Time Synchronization"
+    enabled: true
+    profile_name: "production"
+    method: "GET"
+    uri: "/tm"
+    interval_ms: 900000  # 15 minutes (IEEE 2030.5 requirement)
+    parse:
+      format: "sep_xml"
+      xpath: "//Time/currentTime"
+    transform:
+      scale: 1.0
+      offset: 0
+    # No modbus_write - internal use only
+
+# ----------------------------------------
+# SUBSCRIPTIONS: Push-based Notifications
+# ----------------------------------------
+subscriptions:
+  # Subscription 1: Real-time DER Control Updates
+  # Receives immediate notifications when power commands change
+  - id: "der_control_realtime"
+    name: "DER Control Real-time Notifications"
+    enabled: true
+    profile_name: "production"
+    resource_uri: "/edev/{edev}/der/1/derg/1/derp/1/derca"
+    notification_endpoint: "https://bess-client.example.com:8443/notify"
+    conditions:
+      lower_threshold: null
+      upper_threshold: null
+      attribute_identifier: null  # Notify on any change
+    renew_interval_hours: 24
+    parse:
+      format: "sep_xml"
+      xpath: "//DERControl/DERControlBase/opModFixedW/value"
+    modbus_write:
+      address: 4100
+      datatype: "int16"
+      scale: 0.1
+      offset: 0
+
+# ----------------------------------------
+# NOTIFICATION_SERVER: Client-side TLS Server
+# ----------------------------------------
+notification_server:
+  enabled: true
+  listen_host: "0.0.0.0"
+  listen_port: 8443
+  
+  # TLS is required for IEEE 2030.5 secure notifications
+  tls_server_enabled: true
+  tls_server_cert_path: "certs/notification/server.crt"
+  tls_server_key_path: "certs/notification/server.key"
+  
+  # Mutual TLS (optional but recommended)
+  tls_require_client_cert: false
+  tls_client_ca_path: "certs/notification/utility-ca.crt"
+  
+  endpoint_path: "/notify"
+  
+  # Public URI - must be reachable by the IEEE 2030.5 server
+  # Options:
+  #   - Direct public IP: https://203.0.113.50:8443
+  #   - DNS hostname: https://bess-client.example.com:8443
+  #   - Tailscale Funnel: https://hostname.tailnet.ts.net
+  #   - ngrok tunnel: https://random-id.ngrok.io
+  public_uri: "https://bess-client.example.com:8443"
+
+# ----------------------------------------
+# LOGGING: Log Configuration
+# ----------------------------------------
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/bms_client.log"
+  buffer_size: 500

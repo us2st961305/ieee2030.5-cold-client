@@ -41,9 +41,11 @@ subscription:
   # Enable subscription mode (push-based DER control)
   enabled: false
   
-  # 通知服務器監聽地址 (0.0.0.0 = 所有介面)
-  # Notification server listen address (0.0.0.0 = all interfaces)
-  notification_host: "0.0.0.0"
+  # 通知服務器監聽地址
+  # Use "127.0.0.1" (loopback) unless the IEEE 2030.5 server runs on a different host.
+  # Set to "0.0.0.0" only when the server must reach this client over the network,
+  # and ensure appropriate firewall/IP-allowlist rules are in place.
+  notification_host: "127.0.0.1"
   
   # 通知服務器監聽端口
   # Notification server listen port

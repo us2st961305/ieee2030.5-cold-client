@@ -1,0 +1,296 @@
+# ========================================
+# IEEE 2030.5 BMS Client Runtime Configuration
+# ========================================
+# This file is the source of truth for runtime configuration.
+# Edit via Web UI at /config or manually.
+# Use "Apply" to reload configuration without restart.
+#
+# Schema Version: 2.0.0
+# Reference: IEEE Std 2030.5™-2023
+
+# ----------------------------------------
+# PROFILES: IEEE 2030.5 Server Connections
+# ----------------------------------------
+# Define one or more server profiles for connecting to IEEE 2030.5 servers.
+# Each profile represents a unique server endpoint with its own TLS credentials.
+profiles:
+  - name: "production"
+    server_base_url: "https://ieee20305.coldelectric.com"
+    
+    # TLS Client Configuration (mTLS)
+    tls:
+      client_cert_path: "certs/client.crt"
+      client_key_path: "certs/client.key"
+      ca_bundle_path: "certs/ca.crt"
+      # Set to false for self-signed certificates or testing
+      # Set to true and provide proper CA cert for production
+      verify_server: false
+    
+    # Content-Type preference for requests/responses
+    # Options: "application/sep+xml", "application/sep-exi"
+    content_type_preference: "application/sep+xml"
+    
+    # Device registration info
+    device_id: "bms-client-001"
+    pin: 12345
+
+# ----------------------------------------
+# MODBUS: BMS Communication Settings
+# ----------------------------------------
+modbus:
+  # Connection mode: "tcp" or "rtu" (rtu not yet implemented)
+  mode: "tcp"
+  
+  # TCP connection settings
+  host: "mainline.proxy.rlwy.net"
+  port: 30623
+  unit_id: 1
+  timeout: 5.0  # seconds
+  
+  # Default function codes
+  defaults:
+    function_code_read: 3    # 0x03 Read Holding Registers
+    function_code_write: 6   # 0x06 Write Single Register
+  
+  # Rack configuration (CUBE BMS specific)
+  rack_count: 4
+  
+  # Register address configuration
+  # NOTE: Documentation addresses need -1 offset for actual Modbus communication
+  # Doc 4000 -> Actual 3999, Doc 7000 -> Actual 6999
+  registers:
+    system:
+      base_address: 3999      # Doc: 4000
+      count: 100
+    rack:
+      base_address: 6999      # Doc: 7000
+      offset: 30              # Registers per rack
+      max_racks: 24
+
+# ----------------------------------------
+# POLL_TARGETS: Polling Configuration
+# ----------------------------------------
+# Define resources to poll from IEEE 2030.5 server.
+# Each target specifies what to fetch, how to parse it, and where to write via Modbus.
+poll_targets:
+  # Example: Poll DER Control for power setpoint
+  - id: "der_control_poll"
+    name: "DER Control Power Setpoint"
+    enabled: true
+    
+    # Which profile to use for this poll
+    profile_name: "production"
+    
+    # HTTP method (GET for polling)
+    method: "GET"
+    
+    # Resource URI (relative to server_base_url)
+    # Use {edev} placeholder for EndDevice href
+    uri: "/edev/{edev}/der/1/derg/1/derp/1/derca"
+    
+    # Polling interval in milliseconds
+    interval_ms: 60000  # 1 minute
+    
+    # Response parsing configuration
+    parse:
+      format: "sep_xml"  # Options: sep_xml, sep_exi, json
+      # XPath to extract value (for XML)
+      xpath: "//DERControl/DERControlBase/opModFixedW/value"
+      # Alternative: field_path for nested object access
+      # field_path: "DERControl.DERControlBase.opModFixedW.value"
+    
+    # Value transformation (applied after parsing)
+    transform:
+      scale: 1.0        # Multiply by this value
+      offset: 0         # Add this value after scaling
+      clamp_min: null   # Minimum value (null = no limit)
+      clamp_max: null   # Maximum value (null = no limit)
+    
+    # Modbus write configuration (optional - only if writing to BMS)
+    modbus_write:
+      address: 4100     # Modbus register address (doc address)
+      datatype: "int16" # Options: int16, uint16, int32, uint32, float32
+      scale: 0.1        # Scale factor for Modbus (value * scale)
+      offset: 0         # Offset for Modbus ((value + offset) * scale)
+
+  # Example: Poll Time resource for synchronization
+  - id: "time_sync"
+    name: "Time Synchronization"
+    enabled: true
+    profile_name: "production"
+    method: "GET"
+    uri: "/tm"
+    interval_ms: 900000  # 15 minutes (mandatory per IEEE 2030.5)
+    parse:
+      format: "sep_xml"
+      xpath: "//Time/currentTime"
+    transform:
+      scale: 1.0
+      offset: 0
+    # No modbus_write - just for internal time sync
+
+  # Example: Poll DER Capability
+  - id: "der_capability"
+    name: "DER Capability"
+    enabled: true
+    profile_name: "production"
+    method: "GET"
+    uri: "/edev/{edev}/der/1/dercap"
+    interval_ms: 3600000  # 1 hour
+    parse:
+      format: "sep_xml"
+      field_path: "DERCapability"
+    transform:
+      scale: 1.0
+      offset: 0
+
+# ----------------------------------------
+# SUBSCRIPTIONS: Push-based Notifications
+# ----------------------------------------
+# Define subscriptions to receive real-time updates from the server.
+# Requires notification_server to be enabled.
+# Reference: IEEE Std 2030.5-2023, Clause 8.9
+subscriptions:
+  - id: "der_control_sub"
+    name: "DER Control Subscription"
+    enabled: true
+    
+    # Which profile to use
+    profile_name: "production"
+    
+    # Resource URI to subscribe to (server-side resource)
+    # The server will send notifications when this resource changes
+    resource_uri: "/edev/{edev}/der/1/derg/1/derp/1/derca"
+    
+    # Client endpoint to receive notifications
+    # This must be reachable by the server (use public URL or tunnel)
+    notification_endpoint: "https://shulin1f25r.tailbd4dcc.ts.net/notify"
+    
+    # Subscription conditions (optional)
+    # Server will only notify when conditions are met
+    conditions:
+      # Notify when value changes by at least this amount
+      lower_threshold: null
+      upper_threshold: null
+      # Specific attribute to watch (null = any change)
+      attribute_identifier: null
+    
+    # Renewal interval in hours (IEEE 2030.5 recommends >= 1 hour)
+    # Server may override with shorter duration
+    renew_interval_hours: 24
+    
+    # Response parsing (same format as poll_targets)
+    parse:
+      format: "sep_xml"
+      xpath: "//DERControl/DERControlBase/opModFixedW/value"
+    
+    # Modbus write on notification (optional)
+    modbus_write:
+      address: 4100
+      datatype: "int16"
+      scale: 0.1
+      offset: 0
+
+  - id: "der_program_sub"
+    name: "DER Program Subscription"
+    enabled: false
+    profile_name: "production"
+    resource_uri: "/edev/{edev}/der/1/derg/1/derp"
+    notification_endpoint: "https://shulin1f25r.tailbd4dcc.ts.net/notify"
+    conditions: null
+    renew_interval_hours: 24
+    parse:
+      format: "sep_xml"
+      field_path: "DERProgram"
+
+# ----------------------------------------
+# NOTIFICATION_SERVER: Client-side TLS Server
+# ----------------------------------------
+# The client must run a TLS server to receive secure notifications.
+# Reference: IEEE Std 2030.5-2023 - Client must support TLS as server for notifications
+notification_server:
+  enabled: true
+  
+  # Listen address and port
+  listen_host: "0.0.0.0"
+  listen_port: 8443
+  
+  # TLS Server Configuration
+  # Required for secure notifications (IEEE 2030.5 mandates TLS)
+  tls_server_enabled: true
+  tls_server_cert_path: "certs/server.crt"
+  tls_server_key_path: "certs/server.key"
+  
+  # Optional: Require client certificate from IEEE 2030.5 server
+  # Enables mutual TLS for notification delivery
+  tls_require_client_cert: false
+  tls_client_ca_path: "certs/server_ca.crt"
+  
+  # Notification endpoint path (appended to public URL)
+  endpoint_path: "/notify"
+  
+  # Public URI for the notification server
+  # This is what the IEEE 2030.5 server will use to send notifications
+  # Must be reachable from the server (consider NAT, firewalls, tunnels)
+  public_uri: "https://shulin1f25r.tailbd4dcc.ts.net"
+
+# ----------------------------------------
+# POWER_CONTROL: PCS Control Configuration
+# ----------------------------------------
+# Controls how the client sends power setpoints to the PCS (Power Conversion System).
+# Reference: IEEE Std 2030.5-2023, DERControl.DERControlBase.opModFixedW
+power_control:
+  # Control mode: "simulation" | "dry_run" | "production"
+  #   simulation  - Log only, no Modbus writes (safe for development)
+  #   dry_run     - Full validation + register calculation, but no actual write
+  #   production  - Actually write to PCS Modbus registers (requires auth)
+  mode: "simulation"
+
+  # PCS Modbus TCP connection (may differ from BMS CUBE)
+  pcs_modbus:
+    host: "mainline.proxy.rlwy.net"
+    port: 30623
+    unit_id: 1
+    timeout: 5.0
+
+  # PCS register addresses (per copilot-instructions.md / PCS manual)
+  registers:
+    power_setpoint: 40001       # 功率設定點 (W or scaled)
+    power_setpoint_high: 40002  # 高位元 (32-bit mode only)
+    operation_mode: 40010       # 運行模式
+    enable_control: 40011       # 啟用控制
+    actual_power: 40100         # 實際功率回讀
+    operation_status: 40101     # 運行狀態
+    error_code: 40102           # 錯誤碼
+
+  # Power value format
+  datatype: "uint16"            # U16 register format
+  power_scale_factor: 1.0       # 1.0 = W, 0.1 = 0.1kW
+  use_32bit: false              # true = write to two registers
+  verify_after_write: true      # read-back verification after write
+
+  # Safety limits (enforced in ALL modes including production)
+  limits:
+    max_charge_w: 3000          # 最大充電功率 3kW
+    max_discharge_w: 3000       # 最大放電功率 3kW
+    ramp_rate_w_per_s: 3000     # 最大變化速率 3kW/s
+    min_soc_percent: 10.0       # SOC 下限
+    max_soc_percent: 90.0       # SOC 上限
+
+  # Production mode authorization (required when mode=production)
+  production_auth:
+    # Can also be set via env: POWER_CONTROL_SAFETY_TOKEN
+    safety_token: ""
+    # Set to true to acknowledge risks (equivalent to env I_UNDERSTAND_THE_RISKS)
+    confirm_production: false
+
+# ----------------------------------------
+# LOGGING: Log Configuration
+# ----------------------------------------
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/bms_client.log"
+  
+  # Web UI log buffer size
+  buffer_size: 500
