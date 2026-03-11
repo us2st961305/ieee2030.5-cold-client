@@ -1,0 +1,34 @@
+[Unit]
+Description=BMS 2030.5 Web UI Service
+Documentation=https://github.com/coldelectric/ieee2030.5-cold-client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=coldelectric
+Group=coldelectric
+WorkingDirectory=/home/coldelectric/ieee2030.5-cold-client
+Environment="PATH=/home/coldelectric/ieee2030.5-cold-client/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONPATH=/home/coldelectric/ieee2030.5-cold-client/src"
+Environment="VIRTUAL_ENV=/home/coldelectric/ieee2030.5-cold-client/.venv"
+ExecStart=/home/coldelectric/ieee2030.5-cold-client/.venv/bin/bms-web
+Restart=always
+RestartSec=10
+# Graceful shutdown timeout
+TimeoutStopSec=30
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/coldelectric/ieee2030.5-cold-client/logs /home/coldelectric/ieee2030.5-cold-client/data
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bms-web
+
+[Install]
+WantedBy=multi-user.target

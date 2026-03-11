@@ -4,3 +4,14 @@ certs/
 .venv/
 .coverage
 config/config.yaml
+data/
+
+# Ignore binary garbage files (in case of corrupted output)
+*.bin
+*.tmp
+*.bak
+# Ignore files with non-printable characters (shell-safe pattern won't work in gitignore)
+# Manually delete any files with binary names if they appear
+logs/
+
+.env
