@@ -621,3 +621,460 @@ class TestEmergencyStop:
         await der_client._execute_control(tracked)
         
         assert tracked.status == DERControlEventStatus.FAILED
+
+
+# =============================================================================
+# 10. _processed_mRIDs deque ordering Tests
+# =============================================================================
+
+class TestProcessedMRIDsOrdering:
+    """_processed_mRIDs 插入順序保留測試"""
+
+    def test_processed_mrids_is_deque(self, der_client):
+        """_processed_mRIDs 應為 collections.deque"""
+        import collections
+        assert isinstance(der_client._processed_mRIDs, collections.deque)
+
+    def test_deque_maxlen_equals_config(self, der_client):
+        """deque maxlen 應與 config.processed_event_retention 相同"""
+        assert der_client._processed_mRIDs.maxlen == der_client.config.processed_event_retention
+
+    def test_oldest_entry_evicted_when_full(self, der_client):
+        """deque 滿時應淘汰最舊項目而不是丟失最新項目"""
+        der_client.config.processed_event_retention = 5
+        import collections
+        der_client._processed_mRIDs = collections.deque(maxlen=5)
+
+        for i in range(5):
+            der_client._processed_mRIDs.append(f"old-{i}")
+
+        # Add one more; "old-0" should be evicted
+        der_client._processed_mRIDs.append("newest")
+
+        assert "newest" in der_client._processed_mRIDs
+        assert "old-0" not in der_client._processed_mRIDs
+        assert len(der_client._processed_mRIDs) == 5
+
+    @pytest.mark.asyncio
+    async def test_recent_controls_not_lost_under_high_throughput(self, der_client):
+        """高吞吐量場景下，最新的 mRID 不應因清理而遺失"""
+        der_client.config.processed_event_retention = 10
+        import collections
+        der_client._processed_mRIDs = collections.deque(maxlen=10)
+
+        program = DERProgram(mRID="prog001", primacy=1)
+        await der_client._track_program(program)
+
+        # Fill beyond maxlen
+        for i in range(12):
+            ctrl_id = f"ctrl-{i:03d}"
+            control = DERControl(
+                mRID=ctrl_id,
+                DERControlBase=DERControlBase(
+                    opModFixedW=SignedPerCent(value=1000 * (i + 1), multiplier=0)
+                ),
+            )
+            await der_client._process_control(control, program)
+
+        # The last 10 should be present; the first 2 should have been evicted
+        for i in range(2, 12):
+            assert f"ctrl-{i:03d}" in der_client._processed_mRIDs
+        for i in range(2):
+            assert f"ctrl-{i:03d}" not in der_client._processed_mRIDs
+
+
+# =============================================================================
+# 11. _send_response HTTP POST Tests
+# =============================================================================
+
+class TestSendResponse:
+    """_send_response 實際 HTTP POST 測試"""
+
+    @pytest.mark.asyncio
+    async def test_send_response_posts_to_replyTo(self, der_client, mock_http_client):
+        """control.replyTo 有值時應 POST 到該 URI"""
+        mock_http_client._post = AsyncMock(return_value=(None, None))
+
+        program = DERProgram(mRID="prog001", primacy=1)
+        control = DERControl(
+            mRID="ctrl001",
+            href="/der/1/derc/ctrl001",
+            DERControlBase=DERControlBase(
+                opModFixedW=SignedPerCent(value=50000, multiplier=0)
+            ),
+        )
+        # Attach a replyTo attribute dynamically
+        control.replyTo = "/der/1/rsps"
+
+        tracked = TrackedControl(control=control, program=program, primacy=1)
+
+        result = await der_client._send_response(tracked, ResponseStatusType.EVENT_STARTED)
+
+        assert result is True
+        assert tracked.response_sent is True
+        mock_http_client._post.assert_called_once()
+        call_uri = mock_http_client._post.call_args[0][0]
+        assert call_uri == "/der/1/rsps"
+
+    @pytest.mark.asyncio
+    async def test_send_response_falls_back_to_href_rsp(self, der_client, mock_http_client):
+        """replyTo 缺失時應退回 {href}/rsp"""
+        mock_http_client._post = AsyncMock(return_value=(None, None))
+
+        program = DERProgram(mRID="prog001", primacy=1)
+        control = DERControl(
+            mRID="ctrl001",
+            href="/der/1/derc/ctrl001",
+            DERControlBase=DERControlBase(
+                opModFixedW=SignedPerCent(value=50000, multiplier=0)
+            ),
+        )
+
+        tracked = TrackedControl(control=control, program=program, primacy=1)
+
+        result = await der_client._send_response(tracked, ResponseStatusType.EVENT_COMPLETED)
+
+        assert result is True
+        mock_http_client._post.assert_called_once()
+        call_uri = mock_http_client._post.call_args[0][0]
+        assert call_uri == "/der/1/derc/ctrl001/rsp"
+
+    @pytest.mark.asyncio
+    async def test_send_response_retries_on_failure(self, der_client, mock_http_client):
+        """HTTP POST 失敗時應重試 response_max_retries 次後回傳 False"""
+        mock_http_client._post = AsyncMock(side_effect=Exception("network error"))
+        der_client.config.response_max_retries = 2
+
+        program = DERProgram(mRID="prog001", primacy=1)
+        control = DERControl(
+            mRID="ctrl001",
+            href="/der/1/derc/ctrl001",
+            DERControlBase=DERControlBase(
+                opModFixedW=SignedPerCent(value=50000, multiplier=0)
+            ),
+        )
+        control.replyTo = "/der/1/rsps"
+
+        tracked = TrackedControl(control=control, program=program, primacy=1)
+
+        sleep_mock = AsyncMock()
+        with patch("asyncio.sleep", sleep_mock):
+            result = await der_client._send_response(tracked, ResponseStatusType.EVENT_STARTED)
+
+        assert result is False
+        # 1 initial attempt + 2 retries = 3 total calls
+        assert mock_http_client._post.call_count == 3
+        # Verify exponential backoff delays: 2^0=1s then 2^1=2s
+        sleep_calls = [call.args[0] for call in sleep_mock.call_args_list]
+        assert sleep_calls == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_send_response_no_uri_still_marks_sent(self, der_client, mock_http_client):
+        """href 和 replyTo 均缺失時，仍標記 response_sent=True 並回傳 True"""
+        mock_http_client._post = AsyncMock(return_value=(None, None))
+
+        program = DERProgram(mRID="prog001", primacy=1)
+        control = DERControl(mRID="ctrl001")
+
+        tracked = TrackedControl(control=control, program=program, primacy=1)
+
+        result = await der_client._send_response(tracked, ResponseStatusType.EVENT_EXPIRED)
+
+        assert result is True
+        assert tracked.response_sent is True
+        mock_http_client._post.assert_not_called()
+
+
+# =============================================================================
+# 12. De-energize Cancellation Tests
+# =============================================================================
+
+class TestDeEnergizeCancellation:
+    """De-energize 時取消所有其他控制的測試"""
+
+    @pytest.fixture(autouse=True)
+    def reset_emergency_stop(self):
+        """每個測試前後重置緊急停止"""
+        EmergencyStop._stopped = False
+        EmergencyStop._reason = None
+        EmergencyStop._timestamp = None
+        yield
+        EmergencyStop._stopped = False
+        EmergencyStop._reason = None
+        EmergencyStop._timestamp = None
+
+    @pytest.mark.asyncio
+    async def test_de_energize_cancels_active_power_controls(self, der_client):
+        """測試 opModEnergize=false 取消所有活動的功率控制"""
+        program = DERProgram(mRID="prog001", primacy=1)
+        await der_client._track_program(program)
+
+        # 先建立兩個不同模式的活動控制
+        ctrl_w = DERControl(
+            mRID="ctrl_w",
+            DERControlBase=DERControlBase(
+                opModFixedW=SignedPerCent(value=50000, multiplier=0)
+            ),
+        )
+        await der_client._process_control(ctrl_w, program)
+        assert der_client._tracked_controls["ctrl_w"].status == DERControlEventStatus.COMPLETED
+        assert "opModFixedW" in der_client._active_by_mode
+
+        ctrl_var = DERControl(
+            mRID="ctrl_var",
+            DERControlBase=DERControlBase(
+                opModFixedVar=SignedPerCent(value=10000, multiplier=0)
+            ),
+        )
+        await der_client._process_control(ctrl_var, program)
+        assert "opModFixedVar" in der_client._active_by_mode
+
+        # 發送 opModEnergize=false
+        ctrl_de = DERControl(
+            mRID="ctrl_de_energize",
+            DERControlBase=DERControlBase(opModEnergize=False),
+        )
+        await der_client._process_control(ctrl_de, program)
+
+        # opModFixedW 和 opModFixedVar 應被取消
+        assert der_client._tracked_controls["ctrl_w"].status == DERControlEventStatus.SUPERSEDED
+        assert der_client._tracked_controls["ctrl_var"].status == DERControlEventStatus.SUPERSEDED
+
+        # opModEnergize 應存在且 COMPLETED
+        assert "opModEnergize" in der_client._active_by_mode
+        assert der_client._tracked_controls["ctrl_de_energize"].status == DERControlEventStatus.COMPLETED
+
+        # 原有模式應從 _active_by_mode 中移除
+        assert "opModFixedW" not in der_client._active_by_mode
+        assert "opModFixedVar" not in der_client._active_by_mode
+
+    @pytest.mark.asyncio
+    async def test_disconnect_cancels_active_power_controls(self, der_client):
+        """測試 opModConnect=false 取消所有活動的功率控制"""
+        program = DERProgram(mRID="prog001", primacy=1)
+        await der_client._track_program(program)
+
+        # 先建立活動控制
+        ctrl_w = DERControl(
+            mRID="ctrl_w",
+            DERControlBase=DERControlBase(
+                opModFixedW=SignedPerCent(value=30000, multiplier=0)
+            ),
+        )
+        await der_client._process_control(ctrl_w, program)
+
+        # 發送 opModConnect=false
+        ctrl_disc = DERControl(
+            mRID="ctrl_disconnect",
+            DERControlBase=DERControlBase(opModConnect=False),
+        )
+        await der_client._process_control(ctrl_disc, program)
+
+        # opModFixedW 應被取消
+        assert der_client._tracked_controls["ctrl_w"].status == DERControlEventStatus.SUPERSEDED
+        assert "opModFixedW" not in der_client._active_by_mode
+
+        # opModConnect 應為 COMPLETED
+        assert der_client._tracked_controls["ctrl_disconnect"].status == DERControlEventStatus.COMPLETED
+
+    @pytest.mark.asyncio
+    async def test_de_energize_cancels_scheduled_controls(self, der_client):
+        """測試 de-energize 取消所有排程中的控制"""
+        program = DERProgram(mRID="prog001", primacy=1)
+        await der_client._track_program(program)
+
+        # 建立一個未來的排程控制
+        future_start = int(time.time()) + 3600  # 1 小時後
+        ctrl_scheduled = DERControl(
+            mRID="ctrl_scheduled",
+            DERControlBase=DERControlBase(
+                opModFixedW=SignedPerCent(value=50000, multiplier=0)
+            ),
+            interval=DateTimeInterval(start=future_start, duration=600),
+        )
+        await der_client._process_control(ctrl_scheduled, program)
+        assert der_client._tracked_controls["ctrl_scheduled"].status == DERControlEventStatus.SCHEDULED
+
+        # 發送 opModEnergize=false
+        ctrl_de = DERControl(
+            mRID="ctrl_de_energize",
+            DERControlBase=DERControlBase(opModEnergize=False),
+        )
+        await der_client._process_control(ctrl_de, program)
+
+        # 排程控制應被取消
+        assert der_client._tracked_controls["ctrl_scheduled"].status == DERControlEventStatus.SUPERSEDED
+
+    @pytest.mark.asyncio
+    async def test_de_energize_cancels_default_control(self, der_client):
+        """測試 de-energize 取消 DefaultDERControl"""
+        program = DERProgram(mRID="prog001", primacy=1)
+        await der_client._track_program(program)
+
+        # 設定一個 DefaultDERControl
+        default_ctrl = DefaultDERControl(
+            mRID="default001",
+            DERControlBase=DERControlBase(
+                opModFixedW=SignedPerCent(value=10000, multiplier=0)
+            ),
+        )
+        der_client._active_default = default_ctrl
+        der_client._active_default_program = program
+
+        # 發送 opModEnergize=false
+        ctrl_de = DERControl(
+            mRID="ctrl_de_energize",
+            DERControlBase=DERControlBase(opModEnergize=False),
+        )
+        await der_client._process_control(ctrl_de, program)
+
+        # DefaultDERControl 應被取消
+        assert der_client._active_default is None
+        assert der_client._active_default_program is None
+
+    @pytest.mark.asyncio
+    async def test_de_energize_does_not_cancel_itself(self, der_client):
+        """測試 de-energize 不會取消自己"""
+        program = DERProgram(mRID="prog001", primacy=1)
+        await der_client._track_program(program)
+
+        ctrl_de = DERControl(
+            mRID="ctrl_de_energize",
+            DERControlBase=DERControlBase(opModEnergize=False),
+        )
+        await der_client._process_control(ctrl_de, program)
+
+        # 自己不應被取消
+        assert der_client._tracked_controls["ctrl_de_energize"].status == DERControlEventStatus.COMPLETED
+        assert "opModEnergize" in der_client._active_by_mode
+
+    @pytest.mark.asyncio
+    async def test_no_recovery_during_de_energize(self, der_client):
+        """測試 de-energize 活動期間不恢復被取消的控制"""
+        program = DERProgram(mRID="prog001", primacy=1)
+        await der_client._track_program(program)
+
+        # 建立一個仍在有效期內的控制
+        now = int(time.time())
+        ctrl_w = DERControl(
+            mRID="ctrl_w",
+            DERControlBase=DERControlBase(
+                opModFixedW=SignedPerCent(value=50000, multiplier=0)
+            ),
+            interval=DateTimeInterval(start=now - 60, duration=7200),  # 2 小時有效期
+        )
+        await der_client._process_control(ctrl_w, program)
+
+        # 發送 de-energize
+        ctrl_de = DERControl(
+            mRID="ctrl_de_energize",
+            DERControlBase=DERControlBase(opModEnergize=False),
+            interval=DateTimeInterval(start=now, duration=600),  # 10 分鐘
+        )
+        await der_client._process_control(ctrl_de, program)
+
+        # ctrl_w 已被取消
+        assert der_client._tracked_controls["ctrl_w"].status == DERControlEventStatus.SUPERSEDED
+
+        # 嘗試進行 recovery — 應該被阻止
+        await der_client._check_control_recovery()
+
+        # ctrl_w 不應被恢復（仍為 SUPERSEDED）
+        assert der_client._tracked_controls["ctrl_w"].status == DERControlEventStatus.SUPERSEDED
+
+    @pytest.mark.asyncio
+    async def test_energize_true_does_not_cancel(self, der_client):
+        """測試 opModEnergize=true（復能）不會取消其他控制"""
+        program = DERProgram(mRID="prog001", primacy=1)
+        await der_client._track_program(program)
+
+        # 建立一個活動控制
+        ctrl_w = DERControl(
+            mRID="ctrl_w",
+            DERControlBase=DERControlBase(
+                opModFixedW=SignedPerCent(value=50000, multiplier=0)
+            ),
+        )
+        await der_client._process_control(ctrl_w, program)
+
+        # 發送 opModEnergize=true（復能）
+        ctrl_re = DERControl(
+            mRID="ctrl_re_energize",
+            DERControlBase=DERControlBase(opModEnergize=True),
+        )
+        await der_client._process_control(ctrl_re, program)
+
+        # opModFixedW 不應被取消
+        assert der_client._tracked_controls["ctrl_w"].status == DERControlEventStatus.COMPLETED
+        assert "opModFixedW" in der_client._active_by_mode
+
+    @pytest.mark.asyncio
+    async def test_is_de_energize_control_helper(self, der_client):
+        """測試 _is_de_energize_control() 輔助方法"""
+        # opModEnergize=false → 是 de-energize
+        ctrl_de = DERControl(
+            mRID="t1",
+            DERControlBase=DERControlBase(opModEnergize=False),
+        )
+        assert der_client._is_de_energize_control(ctrl_de) is True
+
+        # opModConnect=false → 是 de-energize
+        ctrl_disc = DERControl(
+            mRID="t2",
+            DERControlBase=DERControlBase(opModConnect=False),
+        )
+        assert der_client._is_de_energize_control(ctrl_disc) is True
+
+        # opModEnergize=true → 不是 de-energize
+        ctrl_re = DERControl(
+            mRID="t3",
+            DERControlBase=DERControlBase(opModEnergize=True),
+        )
+        assert der_client._is_de_energize_control(ctrl_re) is False
+
+        # opModConnect=true → 不是 de-energize
+        ctrl_conn = DERControl(
+            mRID="t4",
+            DERControlBase=DERControlBase(opModConnect=True),
+        )
+        assert der_client._is_de_energize_control(ctrl_conn) is False
+
+        # 一般功率控制 → 不是 de-energize
+        ctrl_w = DERControl(
+            mRID="t5",
+            DERControlBase=DERControlBase(
+                opModFixedW=SignedPerCent(value=50000, multiplier=0)
+            ),
+        )
+        assert der_client._is_de_energize_control(ctrl_w) is False
+
+        # 無 DERControlBase → 不是 de-energize
+        ctrl_empty = DERControl(mRID="t6")
+        assert der_client._is_de_energize_control(ctrl_empty) is False
+
+    @pytest.mark.asyncio
+    async def test_response_sent_for_cancelled_controls(self, der_client, mock_http_client):
+        """測試被取消的控制會發送 EVENT_SUPERSEDED Response"""
+        program = DERProgram(mRID="prog001", primacy=1)
+        await der_client._track_program(program)
+
+        ctrl_w = DERControl(
+            mRID="ctrl_w",
+            DERControlBase=DERControlBase(
+                opModFixedW=SignedPerCent(value=50000, multiplier=0)
+            ),
+        )
+        await der_client._process_control(ctrl_w, program)
+
+        # 記錄 response 發送前的數量
+        responses_before = der_client._stats["responses_sent"]
+
+        # 發送 de-energize
+        ctrl_de = DERControl(
+            mRID="ctrl_de_energize",
+            DERControlBase=DERControlBase(opModEnergize=False),
+        )
+        await der_client._process_control(ctrl_de, program)
+
+        # 應有額外的 response 發送（包含 SUPERSEDED for ctrl_w）
+        assert der_client._stats["responses_sent"] > responses_before

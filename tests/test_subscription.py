@@ -18,8 +18,6 @@ from bms_2030_5_client.subscription import (
     NotificationHandler,
     NotificationHandlerConfig,
     TrackedSubscription,
-    TimeSyncClient,
-    TimeSyncConfig,
 )
 from bms_2030_5_client.models import (
     Subscription,
@@ -40,7 +38,7 @@ class TestNotificationServerConfig:
     def test_config_defaults(self):
         """Test NotificationServerConfig default values."""
         config = NotificationServerConfig()
-        assert config.host == "0.0.0.0"
+        assert config.host == "127.0.0.1"
         assert config.port == 8443
         assert config.endpoint == "/notify"
         assert config.require_client_cert is True
@@ -262,53 +260,6 @@ class TestNotificationHandlerConfig:
 
 
 # =============================================================================
-# TimeSyncConfig Tests
-# =============================================================================
-
-class TestTimeSyncConfig:
-    """Tests for TimeSyncConfig."""
-    
-    def test_config_defaults(self):
-        """Test TimeSyncConfig default values."""
-        config = TimeSyncConfig()
-        assert config.sync_interval_s == 900.0  # 15 minutes
-        assert config.max_drift_s == 5.0
-        assert config.auto_adjust is False
-
-
-# =============================================================================
-# TimeSyncClient Tests
-# =============================================================================
-
-class TestTimeSyncClient:
-    """Tests for TimeSyncClient."""
-    
-    def test_time_sync_client_init(self):
-        """Test TimeSyncClient initialization."""
-        mock_client = MagicMock()
-        client = TimeSyncClient(
-            http_client=mock_client,
-        )
-        
-        assert client.http_client == mock_client
-    
-    def test_time_sync_client_with_config(self):
-        """Test TimeSyncClient with custom config."""
-        mock_client = MagicMock()
-        config = TimeSyncConfig(
-            sync_interval_s=300,
-            max_drift_s=10.0,
-        )
-        client = TimeSyncClient(
-            http_client=mock_client,
-            config=config,
-        )
-        
-        assert client.config.sync_interval_s == 300
-        assert client.config.max_drift_s == 10.0
-
-
-# =============================================================================
 # Subscription Models Tests
 # =============================================================================
 
@@ -393,22 +344,6 @@ class TestSubscriptionIntegration:
         
         # Verify config defaults are set
         assert manager.config.renewal_interval_hours == 24.0
-    
-    @pytest.mark.asyncio
-    async def test_time_sync_uses_polling(self):
-        """Test that time sync uses polling (not subscription)."""
-        # /tm (Time resource) cannot be subscribed per IEEE 2030.5-2023
-        # TimeSyncClient should use polling
-        mock_client = MagicMock()
-        
-        config = TimeSyncConfig(sync_interval_s=900)
-        client = TimeSyncClient(
-            http_client=mock_client,
-            config=config,
-        )
-        
-        # Verify time sync uses polling interval
-        assert client.config.sync_interval_s == 900  # 15 minutes
 
 
 # =============================================================================

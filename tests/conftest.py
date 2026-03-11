@@ -78,12 +78,13 @@ def sample_rack_registers():
         150,    # 7015: cycle_count
         2,      # 7016: rack_status (CHARGING)
         0,      # 7017: alarm_status (no alarms)
-        980,    # 7018: soh (98.0%)
+        0,      # 7018: reserved
         500,    # 7019: max_charge_current (50.0A)
         600,    # 7020: max_discharge_current (60.0A)
         8000,   # 7021: max_charge_voltage (800.0V)
-        6000,   # 7022: min_discharge_voltage (600.0V)
-        0, 0, 0, 0, 0, 0, 0,  # Reserved registers
+        98,     # 7022 -> [22]: SOH (98%)
+        6000,   # 7023: min_discharge_voltage (600.0V)
+        0, 0, 0, 0, 0, 0,  # Reserved registers
     ]
 
 
@@ -202,3 +203,122 @@ def mock_ieee2030_5_client():
     client.lfdi = "ABCD1234567890ABCD1234567890ABCD12345678"
     client.sfdi = 12345678901
     return client
+
+
+# =============================================================================
+# IEEE 2030.5 Function Set Fixtures (Phase 10)
+# =============================================================================
+
+@pytest.fixture
+def sample_der_curve():
+    """Create sample DER Curve (Volt-VAR)."""
+    from bms_2030_5_client.models import DERCurve, DERCurveType, CurveData
+    
+    return DERCurve(
+        mRID="test-volt-var-curve",
+        description="Test Volt-VAR Curve",
+        curveType=DERCurveType.opModVoltVar,
+        curveData=[
+            CurveData(xvalue=92, yvalue=44),
+            CurveData(xvalue=98, yvalue=0),
+            CurveData(xvalue=102, yvalue=0),
+            CurveData(xvalue=108, yvalue=-44),
+        ],
+    )
+
+
+@pytest.fixture
+def sample_lvrt_curve():
+    """Create sample LVRT Curve (IEEE 1547 Category I)."""
+    from bms_2030_5_client.models import DERCurve, DERCurveType, CurveData
+    
+    return DERCurve(
+        mRID="test-lvrt-curve",
+        description="Test LVRT Curve",
+        curveType=DERCurveType.opModLVRTMomentaryCessation,
+        curveData=[
+            CurveData(xvalue=50, yvalue=0),
+            CurveData(xvalue=50, yvalue=160),
+            CurveData(xvalue=70, yvalue=160),
+            CurveData(xvalue=88, yvalue=21000),
+        ],
+    )
+
+
+@pytest.fixture
+def sample_end_device_control():
+    """Create sample EndDeviceControl."""
+    from bms_2030_5_client.models import (
+        EndDeviceControl,
+        DeviceCategoryType,
+        DutyCycleType,
+    )
+    
+    return EndDeviceControl(
+        mRID="test-edc-001",
+        description="Test Load Control Event",
+        deviceCategory=DeviceCategoryType.WATER_HEATER,
+        drProgramMandatory=False,
+        loadShiftForward=True,
+        dutyCycle=DutyCycleType(normalValue=50),
+    )
+
+
+@pytest.fixture
+def sample_text_message():
+    """Create sample TextMessage."""
+    from bms_2030_5_client.models import TextMessage, PriorityType
+    
+    return TextMessage(
+        mRID="test-msg-001",
+        textMessage="Test notification message",
+        priority=PriorityType.NORMAL,
+    )
+
+
+@pytest.fixture
+def sample_tariff_profile():
+    """Create sample TariffProfile."""
+    from bms_2030_5_client.models import TariffProfile, TariffType, CurrencyType
+    
+    return TariffProfile(
+        mRID="test-tariff-001",
+        description="Test TOU Tariff",
+        tariffType=TariffType.TOU,
+        currency=CurrencyType.TWD,
+    )
+
+
+@pytest.fixture
+def sample_prepay_account():
+    """Create sample PrepayAccount."""
+    from bms_2030_5_client.models import (
+        PrepayAccount,
+        PriceValue,
+        CurrencyType,
+    )
+    
+    return PrepayAccount(
+        mRID="test-prepay-001",
+        description="Test Prepay Account",
+        currency=CurrencyType.TWD,
+        lowCreditWarningLevel=PriceValue.from_currency(100, CurrencyType.TWD),
+    )
+
+
+@pytest.fixture
+def sample_flow_reservation_request():
+    """Create sample FlowReservationRequest."""
+    from bms_2030_5_client.models import (
+        FlowReservationRequest,
+        SignedRealEnergy,
+        RequestedActivePower,
+    )
+    
+    return FlowReservationRequest(
+        mRID="test-frr-001",
+        description="Test EV Charging Request",
+        energyRequested=SignedRealEnergy.from_kwh(50),
+        powerRequested=RequestedActivePower.from_kw(7.7),
+        durationRequested=28800,  # 8 hours
+    )

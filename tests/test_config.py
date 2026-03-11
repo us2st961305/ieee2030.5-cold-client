@@ -6,7 +6,7 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from bms_2030_5_client.config import Config, IEEE2030_5Config, ModbusConfig
+from bms_2030_5_client.config import Config, IEEE2030_5Config, ModbusConfig, SupabaseConfig
 
 
 class TestConfig:
@@ -57,3 +57,44 @@ modbus:
         """Test error when config file not found."""
         with pytest.raises(FileNotFoundError):
             Config.from_yaml("/nonexistent/path/config.yaml")
+
+    def test_supabase_defaults(self):
+        """Test default SupabaseConfig values."""
+        config = Config()
+        assert config.supabase.url == ""
+        assert config.supabase.service_key == ""
+        assert config.supabase.battery_status_interval == 300
+
+    def test_supabase_from_yaml(self, tmp_path):
+        """Test loading SupabaseConfig from YAML."""
+        yaml_content = """
+ieee2030_5:
+  server_url: "https://localhost:7443"
+supabase:
+  url: "https://example.supabase.co/functions/v1/battery-status"
+  service_key: "secret-key"
+  battery_status_interval: 120
+"""
+        config_file = tmp_path / "test_config.yaml"
+        config_file.write_text(yaml_content)
+
+        config = Config.from_yaml(config_file)
+
+        assert config.supabase.url == "https://example.supabase.co/functions/v1/battery-status"
+        assert config.supabase.service_key == "secret-key"
+        assert config.supabase.battery_status_interval == 120
+
+    def test_supabase_to_yaml_roundtrip(self, tmp_path):
+        """Test SupabaseConfig survives a to_yaml / from_yaml round trip."""
+        config = Config()
+        config.supabase.url = "https://example.supabase.co/battery"
+        config.supabase.service_key = "my-key"
+        config.supabase.battery_status_interval = 60
+
+        config_file = tmp_path / "roundtrip.yaml"
+        config.to_yaml(config_file)
+
+        loaded = Config.from_yaml(config_file)
+        assert loaded.supabase.url == "https://example.supabase.co/battery"
+        assert loaded.supabase.service_key == "my-key"
+        assert loaded.supabase.battery_status_interval == 60
