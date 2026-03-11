@@ -12,10 +12,11 @@ DER Control Polling Client - 輪詢 IEEE 2030.5 Server 的 DERControl 指令
 from __future__ import annotations
 
 import asyncio
+import collections
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Optional, Set, Awaitable
+from typing import Callable, Deque, Dict, Optional, Awaitable
 
 from bms_2030_5_client.models import (
     DERControl,
@@ -90,8 +91,10 @@ class DERControlPoller:
         self.handler = handler
         self.config = config or DERControlPollerConfig()
         
-        # 已處理的控制 ID（避免重複處理）
-        self._processed_mRIDs: Set[str] = set()
+        # 已處理的控制 ID（使用 deque 以保留插入順序並限制大小）
+        self._processed_mRIDs: Deque[str] = collections.deque(
+            maxlen=self.config.processed_control_retention
+        )
         
         # 輪詢任務
         self._poll_task: Optional[asyncio.Task] = None
@@ -194,7 +197,7 @@ class DERControlPoller:
                     
                     # 標記為已處理
                     if control.mRID:
-                        self._processed_mRIDs.add(control.mRID)
+                        self._processed_mRIDs.append(control.mRID)
                     
                     # 執行回調
                     if self._on_new_control:
@@ -314,12 +317,16 @@ class DERControlPoller:
             return controls
         
         try:
-            # 取得 Active Control List Link
-            link = self._current_program.ActiveDERControlListLink
-            if not link:
+            # IEEE 2030.5-2023: ActiveDERControlListLink 已棄用 (DEPRECATED)
+            # 優先使用 DERControlListLink (/derp/{id}/derc)
+            link_href = (
+                self._current_program.get_der_control_list_href() or
+                self._current_program.get_active_der_control_list_href()  # Fallback
+            )
+            if not link_href:
                 return controls
             
-            response = await self.http_client.get(link)
+            response = await self.http_client.get(link_href)
             if response:
                 control_list = parse_der_control_list_from_xml(response)
                 controls.extend(control_list.DERControl)
@@ -330,13 +337,8 @@ class DERControlPoller:
         return controls
     
     def _cleanup_processed_ids(self) -> None:
-        """清理過多的已處理 ID"""
-        if len(self._processed_mRIDs) > self.config.processed_control_retention:
-            # 保留最近的一半
-            to_keep = self.config.processed_control_retention // 2
-            self._processed_mRIDs = set(
-                list(self._processed_mRIDs)[-to_keep:]
-            )
+        """清理過多的已處理 ID（deque 具有 maxlen，自動移除最舊項目，此方法為空操作）"""
+        pass
     
     def update_poll_interval(self, interval_s: float) -> None:
         """

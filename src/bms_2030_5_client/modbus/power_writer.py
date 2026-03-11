@@ -353,6 +353,32 @@ class ModbusPowerWriter:
         """
         return await self.set_power(0, source="stop")
     
+    async def de_energize(self, reason: str = "opModEnergize=false") -> PowerWriteResult:
+        """
+        去能控制：將 PCS 輸出功率設為 0
+        
+        對應 IEEE 2030.5 DERControlBase.opModEnergize=false
+        
+        執行動作：
+        1. 功率設定點歸零（透過 SafePowerController 安全驗證）
+        2. 記錄去能事件到審計日誌
+        
+        注意：此方法不操作 BMS 繼電器（0x000E），
+        繼電器斷開屬於 opModConnect=false 的範疇。
+        
+        Args:
+            reason: 去能原因描述
+        
+        Returns:
+            PowerWriteResult
+        """
+        power_audit_logger.warning(
+            f"DE_ENERGIZE | reason={reason} | "
+            f"timestamp={datetime.utcnow().isoformat()}"
+        )
+        
+        return await self.set_power(0, source=f"de-energize:{reason}")
+    
     async def emergency_stop(self, reason: str) -> PowerWriteResult:
         """
         緊急停止

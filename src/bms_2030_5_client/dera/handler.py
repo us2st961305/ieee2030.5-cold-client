@@ -15,11 +15,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Callable, Dict, List, Optional, Awaitable
 from uuid import uuid4
+
+from defusedxml.ElementTree import fromstring as _safe_fromstring
 
 from bms_2030_5_client.models import (
     DERControl,
@@ -265,11 +268,67 @@ class DERControlHandler:
             logger.warning(f"DERControl blocked by emergency stop: {event.event_id}")
             return
         
+        # 檢查連接/去能控制（opModConnect=false 或 opModEnergize=false → 功率歸零）
+        control = event.control
+        if control.DERControlBase:
+            base = control.DERControlBase
+            if base.opModEnergize is False or base.opModConnect is False:
+                # De-energize / Disconnect: 強制功率歸零
+                de_energize_reason = (
+                    "opModEnergize=false" if base.opModEnergize is False
+                    else "opModConnect=false"
+                )
+                logger.warning(
+                    f"DERControl {event.event_id}: {de_energize_reason}, "
+                    f"forcing power to 0W"
+                )
+                power_w = 0
+                source = f"{source}:de-energize"
+                
+                # 透過安全控制器設定功率歸零
+                try:
+                    result = await self.power_controller.set_power_setpoint(
+                        power_w=0,
+                        source=source
+                    )
+                    event.result = result
+                    if result.success:
+                        event.status = DERControlEventStatus.COMPLETED
+                        logger.info(
+                            f"DERControl {event.event_id}: de-energize executed "
+                            f"(simulated={result.simulated})"
+                        )
+                    else:
+                        event.status = DERControlEventStatus.FAILED
+                        event.error_message = "; ".join(result.errors)
+                        logger.error(
+                            f"DERControl de-energize failed: {event.event_id}, "
+                            f"errors={result.errors}"
+                        )
+                except Exception as e:
+                    event.status = DERControlEventStatus.FAILED
+                    event.error_message = str(e)
+                    logger.exception(f"DERControl de-energize error: {event.event_id}")
+                
+                # 取代當前活動控制
+                if self._active_event and self._active_event.event_id != event.event_id:
+                    if self._active_event.status in (DERControlEventStatus.ACTIVE, DERControlEventStatus.COMPLETED):
+                        self._active_event.status = DERControlEventStatus.SUPERSEDED
+                self._active_event = event
+                
+                # 執行回調
+                if self._on_control_executed:
+                    try:
+                        await self._on_control_executed(event)
+                    except Exception as e:
+                        logger.exception(f"Control executed callback error: {e}")
+                return
+        
         # 取得功率設定點
         power_w = event.power_setpoint_w
         
         if power_w is None:
-            # 沒有功率設定點，可能是其他類型的控制
+            # 沒有功率設定點，也不是連接/去能控制
             event.status = DERControlEventStatus.COMPLETED
             event.error_message = "No power setpoint specified"
             logger.info(f"DERControl has no power setpoint: {event.event_id}")
@@ -487,13 +546,11 @@ def parse_der_control_from_xml(xml_content: str) -> DERControl:
     Returns:
         DERControl 物件
     """
-    import xml.etree.ElementTree as ET
-    
     # 定義命名空間
     ns = {"sep": "urn:ieee:std:2030.5:ns"}
     sep_ns = "{urn:ieee:std:2030.5:ns}"
     
-    root = ET.fromstring(xml_content)
+    root = _safe_fromstring(xml_content)
     
     control = DERControl()
     
@@ -560,6 +617,11 @@ def parse_der_control_from_xml(xml_content: str) -> DERControl:
         if connect_elem is not None and connect_elem.text:
             control_base.opModConnect = connect_elem.text.lower() == "true"
         
+        # opModEnergize
+        energize_elem = _find_element(base_elem, "opModEnergize", sep_ns, ns)
+        if energize_elem is not None and energize_elem.text:
+            control_base.opModEnergize = energize_elem.text.lower() == "true"
+        
         control.DERControlBase = control_base
     
     # primacy
@@ -580,9 +642,7 @@ def parse_der_control_list_from_xml(xml_content: str) -> DERControlList:
     Returns:
         DERControlList 物件
     """
-    import xml.etree.ElementTree as ET
-    
-    root = ET.fromstring(xml_content)
+    root = _safe_fromstring(xml_content)
     
     control_list = DERControlList()
     

@@ -16,13 +16,14 @@ Reference: IEEE Std 2030.5-2023
 from __future__ import annotations
 
 import asyncio
+import collections
 import logging
 import random
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Callable, Dict, List, Optional, Set, Awaitable
+from typing import Callable, Deque, Dict, List, Optional, Awaitable
 
 from bms_2030_5_client.models import (
     DERControl,
@@ -49,6 +50,14 @@ from bms_2030_5_client.power_control import (
     PowerControlResult,
     EmergencyStop,
 )
+
+# Import control history recorder (optional, for web UI)
+try:
+    from bms_2030_5_client.web.der_control_history import get_der_control_history
+    _has_history_recorder = True
+except ImportError:
+    _has_history_recorder = False
+    get_der_control_history = None
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +124,10 @@ class TrackedControl:
     randomized_duration: Optional[int] = None
     response_sent: bool = False
     status: DERControlEventStatus = DERControlEventStatus.PENDING
+    # Response 重試追蹤
+    pending_response: Optional[ResponseStatusType] = None  # 待發送的 response 狀態
+    response_retry_count: int = 0  # 已重試次數
+    last_response_attempt: float = 0  # 上次嘗試時間
 
 
 # =============================================================================
@@ -191,8 +204,10 @@ class DERClient:
         # 當前活動控制（按控制模式分組）
         self._active_by_mode: Dict[str, TrackedControl] = {}
         
-        # 已處理的事件 ID
-        self._processed_mRIDs: Set[str] = set()
+        # 已處理的事件 ID（使用 deque 以保留插入順序並限制大小）
+        self._processed_mRIDs: Deque[str] = collections.deque(
+            maxlen=self.config.processed_event_retention
+        )
         
         # 當前活動的 DefaultDERControl
         self._active_default: Optional[DefaultDERControl] = None
@@ -338,6 +353,10 @@ class DERClient:
                 if fsa_id not in self._tracked_fsa:
                     logger.info(f"New FSA discovered: {fsa_id}")
                     self._tracked_fsa[fsa_id] = fsa
+                    
+                    # 記錄 FSA 到歷史（供 Web UI 顯示）
+                    self._record_fsa_to_history(fsa)
+                    
                     # 處理新 FSA 的 DERProgram
                     await self._process_fsa_programs(fsa)
                 else:
@@ -346,12 +365,20 @@ class DERClient:
                     if fsa.version != old_fsa.version:
                         logger.info(f"FSA updated: {fsa_id}")
                         self._tracked_fsa[fsa_id] = fsa
+                        
+                        # 記錄 FSA 更新到歷史
+                        self._record_fsa_to_history(fsa)
+                        
                         await self._process_fsa_programs(fsa)
             
             # 檢查被移除的 FSA
             removed_fsa_ids = set(self._tracked_fsa.keys()) - current_fsa_ids
             for fsa_id in removed_fsa_ids:
                 logger.info(f"FSA removed: {fsa_id}")
+                
+                # 記錄 FSA 移除到歷史
+                self._record_fsa_removed(fsa_id)
+                
                 await self._handle_fsa_removed(fsa_id)
                 del self._tracked_fsa[fsa_id]
         
@@ -361,12 +388,18 @@ class DERClient:
     
     async def _process_fsa_programs(self, fsa: FunctionSetAssignments) -> None:
         """處理 FSA 中的 DERProgram 列表"""
-        if not fsa.DERProgramListLink:
+        # 取得 DERProgramListLink href (處理 Link 物件或字串)
+        derp_href = fsa.get_der_program_list_href()
+        if not derp_href:
+            logger.debug(f"FSA {fsa.mRID or fsa.href} has no DERProgramListLink")
             return
+        
+        fsa_id = fsa.mRID or fsa.href or str(id(fsa))
+        logger.info(f"Processing FSA programs: {fsa_id}, DERProgramListLink={derp_href}")
         
         try:
             program_list = await self.http_client._get(
-                fsa.DERProgramListLink,
+                derp_href,
                 DERProgramList
             )
             
@@ -376,8 +409,11 @@ class DERClient:
             # 限制計畫數量
             programs = program_list.DERProgram[:self.config.max_programs]
             
+            # 更新 FSA 的 program 數量
+            self._update_fsa_program_count(fsa_id, len(programs))
+            
             for program in programs:
-                await self._track_program(program)
+                await self._track_program(program, fsa_id=fsa_id)
         
         except Exception as e:
             logger.error(f"Failed to process FSA programs: {e}")
@@ -401,12 +437,13 @@ class DERClient:
     # 2. DERProgram Management
     # =========================================================================
     
-    async def _track_program(self, program: DERProgram) -> None:
+    async def _track_program(self, program: DERProgram, fsa_id: Optional[str] = None) -> None:
         """
         追蹤 DERProgram
         
         Args:
             program: DERProgram 資源
+            fsa_id: 所屬 FSA 的 ID（可選）
         """
         prog_id = program.mRID or program.href or str(id(program))
         
@@ -426,6 +463,9 @@ class DERClient:
                 f"(primacy={program.primacy})"
             )
         
+        # 記錄 DERProgram 到歷史（供 Web UI 顯示）
+        self._record_program_to_history(program, fsa_id)
+        
         # 取得 DefaultDERControl
         await self._fetch_default_control(prog_id)
     
@@ -440,6 +480,9 @@ class DERClient:
         
         tracked = self._tracked_programs[prog_id]
         logger.info(f"Untracking program: {prog_id}")
+        
+        # 記錄 DERProgram 移除到歷史
+        self._record_program_removed(prog_id)
         
         # 取消相關控制
         controls_to_cancel = [
@@ -460,12 +503,13 @@ class DERClient:
         tracked = self._tracked_programs[prog_id]
         program = tracked.program
         
-        if not program.DefaultDERControlLink:
+        default_ctrl_href = program.get_default_der_control_href()
+        if not default_ctrl_href:
             return
         
         try:
             default_ctrl = await self.http_client._get(
-                program.DefaultDERControlLink,
+                default_ctrl_href,
                 DefaultDERControl
             )
             tracked.default_control = default_ctrl
@@ -493,11 +537,25 @@ class DERClient:
             try:
                 await self._poll_controls()
                 self._stats["control_polls"] += 1
+                
+                # 檢查並重試失敗的 response
+                await self._retry_pending_responses()
             except Exception as e:
                 logger.error(f"Control poll error: {e}")
                 self._stats["errors"] += 1
             
             await asyncio.sleep(self.config.control_poll_interval_s)
+    
+    async def _retry_pending_responses(self) -> None:
+        """重試待發送的 response（按 pollRate 週期）"""
+        for ctrl_id, tracked in list(self._tracked_controls.items()):
+            if tracked.pending_response is not None:
+                logger.info(
+                    f"Retrying pending response for control {ctrl_id}, "
+                    f"status={tracked.pending_response.name}, "
+                    f"retry_count={tracked.response_retry_count}"
+                )
+                await self._send_response(tracked, tracked.pending_response)
     
     async def _poll_controls(self) -> None:
         """
@@ -516,18 +574,19 @@ class DERClient:
         """輪詢單個計畫的控制"""
         program = tracked.program
         
-        # 優先取得 ActiveDERControlList
-        control_list_link = (
-            program.ActiveDERControlListLink or
-            program.DERControlListLink
+        # IEEE 2030.5-2023: ActiveDERControlListLink 已棄用 (DEPRECATED)
+        # 優先使用 DERControlListLink (/derp/{id}/derc)
+        control_list_href = (
+            program.get_der_control_list_href() or
+            program.get_active_der_control_list_href()  # Fallback for legacy servers
         )
         
-        if not control_list_link:
+        if not control_list_href:
             return
         
         try:
             control_list = await self.http_client._get(
-                control_list_link,
+                control_list_href,
                 DERControlList
             )
             
@@ -567,6 +626,37 @@ class DERClient:
             f"(program_primacy={program.primacy})"
         )
         
+        # 記錄到歷史（供 Web UI 顯示）
+        if _has_history_recorder:
+            try:
+                history = get_der_control_history()
+                control_type = "unknown"
+                power_w = control.get_power_setpoint_w()
+                if control.DERControlBase:
+                    if control.DERControlBase.opModFixedW:
+                        control_type = "opModFixedW"
+                    elif control.DERControlBase.opModFixedVar:
+                        control_type = "opModFixedVar"
+                    elif control.DERControlBase.opModMaxLimW:
+                        control_type = "opModMaxLimW"
+                    elif control.DERControlBase.opModEnergize is not None:
+                        control_type = "opModEnergize"
+                    elif control.DERControlBase.opModConnect is not None:
+                        control_type = "opModConnect"
+                
+                history.record_control_received(
+                    control_id=ctrl_id,
+                    source="polling",
+                    program_id=program.mRID,
+                    primacy=program.primacy,
+                    control_type=control_type,
+                    power_setpoint_w=power_w,
+                    interval_start=control.interval.start if control.interval else None,
+                    interval_duration=control.interval.duration if control.interval else None,
+                )
+            except Exception as e:
+                logger.debug(f"Failed to record control history: {e}")
+        
         # 計算隨機化的開始時間
         randomized_start = self._calculate_randomized_start(control)
         randomized_duration = self._calculate_randomized_duration(control)
@@ -581,6 +671,12 @@ class DERClient:
         )
         
         self._tracked_controls[ctrl_id] = tracked_ctrl
+        
+        # 發送 EVENT_RECEIVED 回應 (IEEE 2030.5-2023: 收到控制時回報)
+        await self._send_response(
+            tracked_ctrl,
+            ResponseStatusType.EVENT_RECEIVED
+        )
         
         # 檢查是否應立即執行
         now = int(time.time())
@@ -620,7 +716,7 @@ class DERClient:
             await self._execute_control(tracked_ctrl)
         
         # 標記已處理
-        self._processed_mRIDs.add(ctrl_id)
+        self._processed_mRIDs.append(ctrl_id)
         self._cleanup_processed_mRIDs()
     
     def _calculate_randomized_start(
@@ -709,6 +805,19 @@ class DERClient:
                 tracked.status = DERControlEventStatus.COMPLETED
                 self._stats["controls_executed"] += 1
                 
+                # 記錄執行結果到歷史
+                if _has_history_recorder:
+                    try:
+                        history = get_der_control_history()
+                        history.update_control_executed(
+                            control_id=ctrl_id,
+                            success=True,
+                            simulated=event.result.simulated if event.result else True,
+                            message=event.result.message if event.result else None,
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to update control history: {e}")
+                
                 # 發送「完成」回報
                 await self._send_response(
                     tracked,
@@ -717,6 +826,19 @@ class DERClient:
             else:
                 tracked.status = event.status
                 
+                # 記錄失敗結果
+                if _has_history_recorder:
+                    try:
+                        history = get_der_control_history()
+                        history.update_control_executed(
+                            control_id=ctrl_id,
+                            success=False,
+                            simulated=True,
+                            error=event.error_message,
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to update control history: {e}")
+                
             logger.info(
                 f"Control {ctrl_id} executed: "
                 f"power={tracked.control.get_power_setpoint_w()}W"
@@ -724,6 +846,13 @@ class DERClient:
             
             # 追蹤活動控制（按模式）
             self._track_active_control(tracked)
+            
+            # De-energize/disconnect：取消所有其他活動控制
+            if (
+                tracked.status == DERControlEventStatus.COMPLETED
+                and self._is_de_energize_control(tracked.control)
+            ):
+                await self._cancel_all_active_controls(ctrl_id)
             
             # 回調
             if self._on_control_executed:
@@ -752,7 +881,89 @@ class DERClient:
                 self._active_by_mode["opModMaxLimW"] = tracked
             if base.opModConnect is not None:
                 self._active_by_mode["opModConnect"] = tracked
+            if base.opModEnergize is not None:
+                self._active_by_mode["opModEnergize"] = tracked
     
+    def _is_de_energize_control(self, control: DERControl) -> bool:
+        """檢查控制是否為 de-energize 或 disconnect 類型"""
+        if not control.DERControlBase:
+            return False
+        base = control.DERControlBase
+        return (
+            (base.opModEnergize is not None and base.opModEnergize is False)
+            or (base.opModConnect is not None and base.opModConnect is False)
+        )
+
+    async def _cancel_all_active_controls(self, exclude_mrid: str) -> None:
+        """
+        取消所有活動中和排程中的 DERControl（de-energize/disconnect 觸發時）
+
+        當收到 opModEnergize=false 或 opModConnect=false 時，
+        設備已去能/斷開，其他功率控制已無意義，全部取消。
+
+        Args:
+            exclude_mrid: 觸發 de-energize 的控制 mRID，不取消自己
+        """
+        cancelled_count = 0
+
+        # 1. 取消 _active_by_mode 中所有其他模式的活動控制
+        for mode in list(self._active_by_mode.keys()):
+            active = self._active_by_mode[mode]
+            active_mrid = active.control.mRID or str(id(active.control))
+
+            if active_mrid == exclude_mrid:
+                continue
+
+            if active.status in (
+                DERControlEventStatus.ACTIVE,
+                DERControlEventStatus.COMPLETED,
+            ):
+                active.status = DERControlEventStatus.SUPERSEDED
+                logger.info(
+                    f"De-energize: cancelling active control "
+                    f"{active_mrid} (mode={mode})"
+                )
+                await self._send_response(
+                    active,
+                    ResponseStatusType.EVENT_SUPERSEDED
+                )
+                cancelled_count += 1
+                del self._active_by_mode[mode]
+
+        # 2. 取消 _tracked_controls 中所有 SCHEDULED 狀態的控制
+        for ctrl_id, tracked in self._tracked_controls.items():
+            if ctrl_id == exclude_mrid:
+                continue
+
+            if tracked.status == DERControlEventStatus.SCHEDULED:
+                tracked.status = DERControlEventStatus.SUPERSEDED
+                logger.info(
+                    f"De-energize: cancelling scheduled control {ctrl_id}"
+                )
+                await self._send_response(
+                    tracked,
+                    ResponseStatusType.EVENT_SUPERSEDED
+                )
+                cancelled_count += 1
+
+        # 3. 取消 DefaultDERControl
+        if self._active_default:
+            logger.info("De-energize: cancelling active DefaultDERControl")
+            self._active_default = None
+            self._active_default_program = None
+
+        # 4. 通知 Handler 取消其 active_event（非本次控制）
+        if self.handler._active_event:
+            active_event_id = self.handler._active_event.event_id
+            if active_event_id != exclude_mrid:
+                await self.handler.cancel_control(active_event_id)
+
+        if cancelled_count > 0:
+            logger.warning(
+                f"De-energize: cancelled {cancelled_count} controls "
+                f"(triggered by {exclude_mrid})"
+            )
+
     async def _check_default_control(self, tracked_program: TrackedProgram) -> None:
         """
         檢查並執行 DefaultDERControl
@@ -848,6 +1059,8 @@ class DERClient:
             modes.append("opModMaxLimW")
         if base.opModConnect is not None:
             modes.append("opModConnect")
+        if base.opModEnergize is not None:
+            modes.append("opModEnergize")
         
         for mode in modes:
             if mode in self._active_by_mode:
@@ -890,18 +1103,60 @@ class DERClient:
         status: ResponseStatusType
     ) -> bool:
         """
-        發送控制回報
+        發送控制回報（含重試機制）
         
-        依據 responseRequired 欄位決定是否發送
+        依據 responseRequired 欄位決定是否發送，發送失敗時以指數退避重試。
+        IEEE 2030.5 要求將 DERControlResponse POST 到 replyTo URI
+        如果失敗，會按照 pollRate 持續重試直到成功或達到最大重試次數
         """
         control = tracked.control
         
-        # 檢查是否需要回報（簡化：假設都需要）
-        # 實際應檢查 control.responseRequired
+        # 檢查是否需要回報
+        # responseRequired 是一個 bitmask：
+        #   Bit 0: Response on event received
+        #   Bit 1: Response on event started
+        #   Bit 2: Response on event completed
+        #   Bit 3: Response on event status changed
+        # 如果 responseRequired 為 None 或 0，仍然發送回報（最佳實踐）
+        response_required = getattr(control, 'responseRequired', None)
+        if response_required is None:
+            response_required = 0x07
         
+        # 檢查是否需要發送此狀態的回報
+        should_send = False
+        if status == ResponseStatusType.EVENT_RECEIVED:
+            should_send = bool(response_required & 0x01)
+        elif status == ResponseStatusType.EVENT_STARTED:
+            should_send = bool(response_required & 0x02)
+        elif status in (ResponseStatusType.EVENT_COMPLETED, 
+                        ResponseStatusType.EVENT_CANCELLED,
+                        ResponseStatusType.EVENT_SUPERSEDED,
+                        ResponseStatusType.EVENT_ABORTED_SERVER,
+                        ResponseStatusType.EVENT_EXPIRED):
+            should_send = bool(response_required & 0x04)
+        else:
+            should_send = True  # 其他狀態預設發送
+        
+        if not should_send:
+            logger.debug(f"Response not required for status {status.name}")
+            return True
+
+        # 解析回報目標 URI
+        reply_to = getattr(control, "replyTo", None)
+        if not reply_to:
+            if control.href:
+                reply_to = f"{control.href}/rsp"
+            else:
+                logger.warning(
+                    f"No replyTo URI for control {control.mRID}, skipping response"
+                )
+                tracked.response_sent = True
+                self._stats["responses_sent"] += 1
+                return True
+
         # 取得 LFDI
         lfdi = self.http_client.lfdi or ""
-        
+
         # 建立回報
         response = DERControlResponse(
             endDeviceLFDI=lfdi,
@@ -910,29 +1165,62 @@ class DERClient:
             createdDateTime=int(time.time()),
         )
         
-        # 發送回報
-        # 實際應發送到 control.replyTo URI
-        # 這裡簡化為記錄日誌
-        logger.info(
-            f"Response: control={control.mRID}, "
-            f"status={status.name}, "
-            f"lfdi={lfdi[:8]}..."
-        )
+        # 實際發送 HTTP POST（含重試機制）
+        post_success = False
+        max_retries = self.config.response_max_retries
         
-        tracked.response_sent = True
-        self._stats["responses_sent"] += 1
+        for attempt in range(max_retries):
+            try:
+                await self.http_client._post(
+                    reply_to,
+                    response
+                )
+                post_success = True
+                logger.info(
+                    f"Response sent: control={control.mRID}, "
+                    f"status={status.name}, "
+                    f"lfdi={lfdi[:8]}..."
+                )
+                # 成功：清除待重試狀態
+                tracked.pending_response = None
+                tracked.response_retry_count = 0
+                break
+            except Exception as e:
+                tracked.response_retry_count = attempt + 1
+                tracked.last_response_attempt = time.time()
+                
+                if attempt < max_retries - 1:
+                    wait_time = min(2 ** attempt, 30)  # 指數退避，最多 30 秒
+                    logger.warning(
+                        f"Response POST failed (attempt {attempt + 1}/{max_retries}): {e}. "
+                        f"Retrying in {wait_time}s..."
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"Response POST failed after {max_retries} attempts: {e}. "
+                        f"Will retry on next poll cycle."
+                    )
+                    # 標記為待重試，下次 poll 時會重試
+                    tracked.pending_response = status
         
-        # TODO: 實際發送 HTTP POST 到 replyTo
-        # try:
-        #     await self.http_client._post(
-        #         control.replyTo,
-        #         response
-        #     )
-        # except Exception as e:
-        #     logger.error(f"Failed to send response: {e}")
-        #     return False
+        if post_success:
+            tracked.response_sent = True
+            self._stats["responses_sent"] += 1
         
-        return True
+        # 記錄回報到歷史
+        if _has_history_recorder:
+            try:
+                history = get_der_control_history()
+                ctrl_id = control.mRID or str(id(control))
+                history.update_response_sent(
+                    control_id=ctrl_id,
+                    response_status=status.name,
+                )
+            except Exception as e:
+                logger.debug(f"Failed to record response history: {e}")
+        
+        return post_success
     
     # =========================================================================
     # Scheduler Loop
@@ -993,7 +1281,21 @@ class DERClient:
         檢查是否需要回復低優先級控制
         
         當高優先級控制結束時，回復仍在有效期內的低優先級控制
+        注意：當 de-energize/disconnect 控制活動時，不恢復任何控制
         """
+        # 如果有活動的 de-energize/disconnect 控制，不恢復任何控制
+        for mode in ("opModEnergize", "opModConnect"):
+            if mode in self._active_by_mode:
+                active_de = self._active_by_mode[mode]
+                if (
+                    active_de.status in (
+                        DERControlEventStatus.ACTIVE,
+                        DERControlEventStatus.COMPLETED,
+                    )
+                    and self._is_de_energize_control(active_de.control)
+                ):
+                    return  # de-energize 活動中，跳過所有恢復
+        
         now = int(time.time())
         
         for mode, active in list(self._active_by_mode.items()):
@@ -1040,21 +1342,110 @@ class DERClient:
             return True
         if mode == "opModConnect" and base.opModConnect is not None:
             return True
+        if mode == "opModEnergize" and base.opModEnergize is not None:
+            return True
         
         return False
+    
+    # =========================================================================
+    # History Recording (for Web UI)
+    # =========================================================================
+    
+    def _record_fsa_to_history(self, fsa: FunctionSetAssignments) -> None:
+        """記錄 FSA 到歷史（供 Web UI 顯示）"""
+        if not _has_history_recorder:
+            return
+        
+        try:
+            history = get_der_control_history()
+            fsa_id = fsa.mRID or fsa.href or str(id(fsa))
+            
+            history.record_fsa(
+                fsa_id=fsa_id,
+                href=fsa.href,
+                description=fsa.description,
+                version=fsa.version or 0,
+                der_program_list_link=fsa.get_der_program_list_href(),
+                program_count=0,  # Will be updated when programs are discovered
+            )
+        except Exception as e:
+            logger.debug(f"Failed to record FSA history: {e}")
+    
+    def _record_fsa_removed(self, fsa_id: str) -> None:
+        """記錄 FSA 移除到歷史"""
+        if not _has_history_recorder:
+            return
+        
+        try:
+            history = get_der_control_history()
+            history.remove_fsa(fsa_id)
+        except Exception as e:
+            logger.debug(f"Failed to record FSA removal: {e}")
+    
+    def _update_fsa_program_count(self, fsa_id: str, program_count: int) -> None:
+        """更新 FSA 的 program 數量"""
+        if not _has_history_recorder:
+            return
+        
+        try:
+            history = get_der_control_history()
+            history.record_fsa(
+                fsa_id=fsa_id,
+                program_count=program_count,
+            )
+        except Exception as e:
+            logger.debug(f"Failed to update FSA program count: {e}")
+    
+    def _record_program_to_history(
+        self,
+        program: DERProgram,
+        fsa_id: Optional[str] = None
+    ) -> None:
+        """記錄 DERProgram 到歷史（供 Web UI 顯示）"""
+        if not _has_history_recorder:
+            return
+        
+        try:
+            history = get_der_control_history()
+            prog_id = program.mRID or program.href or str(id(program))
+            
+            # 計算 control 數量（從 Link 物件的 all 屬性取得）
+            control_count = 0
+            if program.DERControlListLink and hasattr(program.DERControlListLink, 'all'):
+                control_count = program.DERControlListLink.all or 0
+            
+            history.record_program(
+                program_id=prog_id,
+                href=program.href,
+                description=program.description,
+                primacy=program.primacy,
+                version=program.version or 0,
+                fsa_id=fsa_id,
+                der_control_list_link=program.get_der_control_list_href(),
+                default_der_control_link=program.get_default_der_control_href(),
+                control_count=control_count,
+            )
+        except Exception as e:
+            logger.debug(f"Failed to record program history: {e}")
+    
+    def _record_program_removed(self, program_id: str) -> None:
+        """記錄 DERProgram 移除到歷史"""
+        if not _has_history_recorder:
+            return
+        
+        try:
+            history = get_der_control_history()
+            history.remove_program(program_id)
+        except Exception as e:
+            logger.debug(f"Failed to record program removal: {e}")
     
     # =========================================================================
     # Utilities
     # =========================================================================
     
     def _cleanup_processed_mRIDs(self) -> None:
-        """清理已處理的事件 ID"""
-        if len(self._processed_mRIDs) > self.config.processed_event_retention:
-            # 保留最新的一半
-            to_keep = list(self._processed_mRIDs)[
-                -self.config.processed_event_retention // 2:
-            ]
-            self._processed_mRIDs = set(to_keep)
+        """清理已處理的事件 ID（deque 具有 maxlen，自動移除最舊項目，此方法為空操作）"""
+        pass
     
     def set_on_control_executed(
         self,
