@@ -152,11 +152,11 @@ class RackData:
             cycle_count=registers[15],  # 7015
             status=RackStatus(registers[16]) if registers[16] in RackStatus._value2member_map_ else RackStatus.OFFLINE,
             alarm_status=registers[17],  # 7017
-            soh=registers[18] * 0.1,  # 7018: 0.1%
+            soh=registers[22],  # 7022 -> 7021 [22]: SOH (U16, 1%)
             max_charge_current=registers[19] * 0.1,  # 7019: 0.1A
             max_discharge_current=registers[20] * 0.1,  # 7020: 0.1A
             max_charge_voltage=registers[21] * 0.1,  # 7021: 0.1V
-            min_discharge_voltage=registers[22] * 0.1,  # 7022: 0.1V
+            min_discharge_voltage=registers[23] * 0.1,  # 7023: 0.1V
             timestamp=datetime.now(),
         )
 

@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import logging
 import ssl
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Type, TypeVar
 from datetime import datetime
@@ -213,6 +214,93 @@ class IEEE2030_5Client:
             self._client = None
         logger.info("Disconnected from IEEE 2030.5 server")
 
+    def _detect_resource_type(self, path: str) -> str:
+        """Detect resource type from path."""
+        path_lower = path.lower()
+        if "/fsa" in path_lower:
+            return "FSA"
+        elif "/derp" in path_lower:
+            return "DERProgram"
+        elif "/derc" in path_lower:
+            return "DERControl"
+        elif "/derca" in path_lower:
+            return "DERCap"
+        elif "/ders" in path_lower:
+            return "DERStatus"
+        elif "/der" in path_lower:
+            return "DER"
+        elif "/dcap" in path_lower:
+            return "DeviceCap"
+        elif "/edev" in path_lower:
+            return "EndDevice"
+        elif "/mup" in path_lower:
+            return "MirrorUsagePoint"
+        elif "/tm" in path_lower or "/time" in path_lower:
+            return "Time"
+        elif "/rsps" in path_lower:
+            return "Response"
+        elif "/sub" in path_lower:
+            return "Subscription"
+        elif "/ntfy" in path_lower or "/notify" in path_lower:
+            return "Notification"
+        else:
+            return "Other"
+    
+    def _log_http_request(
+        self,
+        method: str,
+        path: str,
+        resource_type: str,
+        request_body: Optional[str],
+        response: Optional[httpx.Response],
+        response_time_ms: float,
+        error: Optional[str] = None,
+    ) -> None:
+        """Log HTTP request to history recorder."""
+        try:
+            from bms_2030_5_client.web.der_control_history import (
+                DERControlHistoryRecorder,
+                RequestType,
+            )
+            
+            recorder = DERControlHistoryRecorder()
+            
+            # 確定 request type
+            request_type_map = {
+                "GET": RequestType.GET,
+                "POST": RequestType.POST,
+                "PUT": RequestType.PUT,
+                "DELETE": RequestType.DELETE,
+            }
+            request_type = request_type_map.get(method, RequestType.GET)
+            
+            # 準備回應資料
+            response_code = response.status_code if response else 0
+            response_body = response.text if response else None
+            response_body_size = len(response.text) if response and response.text else 0
+            response_headers = dict(response.headers) if response else None
+            success = response_code < 400 if response else False
+            
+            recorder.log_request(
+                resource_type=resource_type,
+                uri=f"{self.server_url}{path}",
+                request_type=request_type,
+                request_headers={"Content-Type": "application/sep+xml", "Accept": "application/sep+xml"},
+                request_body=request_body,
+                response_code=response_code,
+                response_time_ms=response_time_ms,
+                response_body_size=response_body_size,
+                response_headers=response_headers,
+                response_body=response_body,
+                success=success,
+                error_message=error,
+            )
+        except ImportError:
+            # Web module not available
+            pass
+        except Exception as e:
+            logger.debug(f"Failed to log HTTP request: {e}")
+
     async def _get(
         self,
         path: str,
@@ -231,17 +319,51 @@ class IEEE2030_5Client:
         if not self._client:
             raise IEEE2030_5ClientError("Not connected")
 
+        start_time = time.time()
+        resource_type = self._detect_resource_type(path)
+        
         try:
             response = await self._client.get(path)
+            response_time_ms = (time.time() - start_time) * 1000
             response.raise_for_status()
+            
+            # 記錄請求
+            self._log_http_request(
+                method="GET",
+                path=path,
+                resource_type=resource_type,
+                request_body=None,
+                response=response,
+                response_time_ms=response_time_ms,
+            )
             
             if response_type:
                 return xml_to_dataclass(response.text, response_type)
             return response.text
             
         except httpx.HTTPStatusError as e:
+            response_time_ms = (time.time() - start_time) * 1000
+            self._log_http_request(
+                method="GET",
+                path=path,
+                resource_type=resource_type,
+                request_body=None,
+                response=e.response,
+                response_time_ms=response_time_ms,
+                error=str(e),
+            )
             raise IEEE2030_5ClientError(f"HTTP error: {e.response.status_code}") from e
         except Exception as e:
+            response_time_ms = (time.time() - start_time) * 1000
+            self._log_http_request(
+                method="GET",
+                path=path,
+                resource_type=resource_type,
+                request_body=None,
+                response=None,
+                response_time_ms=response_time_ms,
+                error=str(e),
+            )
             raise IEEE2030_5ClientError(f"Request failed: {e}") from e
 
     async def _post(
@@ -264,13 +386,28 @@ class IEEE2030_5Client:
         if not self._client:
             raise IEEE2030_5ClientError("Not connected")
 
+        start_time = time.time()
+        resource_type = self._detect_resource_type(path)
+        xml_data = None
+        
         try:
             xml_data = dataclass_to_xml(data)
             logger.debug(f"POST {path} Request:\n{xml_data}")
             response = await self._client.post(path, content=xml_data)
+            response_time_ms = (time.time() - start_time) * 1000
             logger.debug(f"POST {path} Response Status: {response.status_code}")
             logger.debug(f"POST {path} Response Body:\n{response.text}")
             response.raise_for_status()
+            
+            # 記錄請求
+            self._log_http_request(
+                method="POST",
+                path=path,
+                resource_type=resource_type,
+                request_body=xml_data,
+                response=response,
+                response_time_ms=response_time_ms,
+            )
             
             location = response.headers.get("Location", "")
             
@@ -282,9 +419,19 @@ class IEEE2030_5Client:
             return result, location
             
         except httpx.HTTPStatusError as e:
+            response_time_ms = (time.time() - start_time) * 1000
             logger.error(f"POST {path} Request:\n{xml_data}")
             logger.error(f"POST {path} Response Status: {e.response.status_code}")
             logger.error(f"POST {path} Response Body:\n{e.response.text}")
+            self._log_http_request(
+                method="POST",
+                path=path,
+                resource_type=resource_type,
+                request_body=xml_data,
+                response=e.response,
+                response_time_ms=response_time_ms,
+                error=str(e),
+            )
             raise IEEE2030_5ClientError(f"HTTP error: {e.response.status_code}") from e
 
     async def _put(
@@ -305,17 +452,43 @@ class IEEE2030_5Client:
         if not self._client:
             raise IEEE2030_5ClientError("Not connected")
 
+        start_time = time.time()
+        resource_type = self._detect_resource_type(path)
+        xml_data = None
+        
         try:
             xml_data = dataclass_to_xml(data)
             logger.debug(f"PUT {path} XML:\n{xml_data}")
             response = await self._client.put(path, content=xml_data)
+            response_time_ms = (time.time() - start_time) * 1000
             response.raise_for_status()
+            
+            # 記錄請求
+            self._log_http_request(
+                method="PUT",
+                path=path,
+                resource_type=resource_type,
+                request_body=xml_data,
+                response=response,
+                response_time_ms=response_time_ms,
+            )
+            
             return True
             
         except httpx.HTTPStatusError as e:
+            response_time_ms = (time.time() - start_time) * 1000
             logger.error(f"PUT error: {e.response.status_code}")
             logger.error(f"PUT request XML: {xml_data}")
             logger.error(f"Response body: {e.response.text}")
+            self._log_http_request(
+                method="PUT",
+                path=path,
+                resource_type=resource_type,
+                request_body=xml_data,
+                response=e.response,
+                response_time_ms=response_time_ms,
+                error=str(e),
+            )
             return False
 
     # =========================================================================
@@ -492,7 +665,56 @@ class IEEE2030_5Client:
             True if successful
         """
         status_path = f"{der_path}/ders"
-        return await self._put(status_path, status)
+        success = await self._put(status_path, status)
+        
+        # Record to data recorder
+        self._record_der_status(der_path, status, success)
+        
+        return success
+
+    def _record_der_status(self, der_path: str, status: DERStatus, success: bool) -> None:
+        """Record a DER status upload to the data recorder."""
+        try:
+            from bms_2030_5_client.web.data_recorder import get_data_recorder
+            
+            recorder = get_data_recorder()
+            status_dict = {}
+            
+            # Extract status fields
+            if hasattr(status, "stateOfChargeStatus") and status.stateOfChargeStatus:
+                soc = status.stateOfChargeStatus
+                if hasattr(soc, "value"):
+                    status_dict["soc"] = soc.value / 100.0  # Convert from 0-10000 to %
+            
+            if hasattr(status, "operationalModeStatus") and status.operationalModeStatus:
+                oms = status.operationalModeStatus
+                if hasattr(oms, "value"):
+                    status_dict["operationalMode"] = oms.value
+            
+            if hasattr(status, "genConnectStatus") and status.genConnectStatus:
+                gc = status.genConnectStatus
+                if hasattr(gc, "value"):
+                    status_dict["genConnectStatus"] = gc.value
+            
+            if hasattr(status, "storConnectStatus") and status.storConnectStatus:
+                sc = status.storConnectStatus
+                if hasattr(sc, "value"):
+                    status_dict["storConnectStatus"] = sc.value
+            
+            if hasattr(status, "alarmStatus") and status.alarmStatus:
+                status_dict["alarmStatus"] = status.alarmStatus
+            
+            if hasattr(status, "readingTime") and status.readingTime:
+                status_dict["readingTime"] = status.readingTime
+            
+            recorder.record_der_status(
+                der_path=der_path,
+                status=status_dict,
+                status_code=200 if success else 500,
+                success=success,
+            )
+        except Exception as e:
+            logger.debug(f"Failed to record DER status: {e}")
 
     async def update_der_availability(
         self,
@@ -681,6 +903,23 @@ class IEEE2030_5Client:
             MirrorUsagePoint resource
         """
         return await self._get(mup_href, MirrorUsagePoint)
+
+    async def get_mirror_meter_reading_list(self, mup_href: str) -> MirrorMeterReadingList:
+        """
+        Get the MirrorMeterReadingList from a MirrorUsagePoint.
+        
+        The server stores MirrorMeterReading resources as a sub-resource
+        list at {mup_href}/mmr rather than embedding them inline in the
+        MirrorUsagePoint response.
+        
+        Args:
+            mup_href: The href of the parent MirrorUsagePoint
+            
+        Returns:
+            MirrorMeterReadingList containing all meter readings
+        """
+        mmr_path = f"{mup_href}/mmr"
+        return await self._get(mmr_path, MirrorMeterReadingList)
 
     async def update_mirror_usage_point(
         self,

@@ -11,6 +11,8 @@ import logging
 from typing import Optional, Callable, List, Union, Dict
 from pathlib import Path
 
+import httpx
+
 from bms_2030_5_client.config import Config
 from bms_2030_5_client.modbus import ModbusBMSClient, BMSDataCollector
 from bms_2030_5_client.ieee2030_5 import IEEE2030_5Client
@@ -36,6 +38,12 @@ from bms_2030_5_client.power_control import (
     SafePowerController,
     PowerControlConfig,
     PowerLimits,
+    create_power_controller_from_runtime,
+)
+from bms_2030_5_client.modbus.power_writer import (
+    ModbusPowerWriter,
+    ModbusPowerWriterConfig,
+    PCSRegisterAddress,
 )
 from bms_2030_5_client.subscription import (
     NotificationServer,
@@ -44,8 +52,19 @@ from bms_2030_5_client.subscription import (
     SubscriptionManagerConfig,
     NotificationHandler,
     NotificationHandlerConfig,
-    TimeSyncClient,
-    TimeSyncConfig,
+)
+from bms_2030_5_client.db import (
+    IEEE2030_5Database,
+    init_database,
+    get_database,
+    EndDeviceRecord,
+    DERRecord,
+    MirrorUsagePointRecord,
+    MirrorMeterReadingRecord,
+)
+from bms_2030_5_client.cycle_storage import (
+    CycleStorage,
+    CycleTrackingData,
 )
 
 logger = logging.getLogger(__name__)
@@ -120,7 +139,6 @@ class BMSClient:
         self._running = False
         self._reporting_task: Optional[asyncio.Task] = None
         self._metering_task: Optional[asyncio.Task] = None
-        self._battery_status_task: Optional[asyncio.Task] = None
         self._edev_href: Optional[str] = None  # EndDevice href (e.g., /edev/97)
         self._der_path: Optional[str] = None
         self._mup_href: Optional[str] = None  # MirrorUsagePoint href
@@ -132,10 +150,9 @@ class BMSClient:
         self._log_event_id_counter: int = 0  # Unique LogEvent ID counter
         
         # Cycle tracking (charge >10% + discharge >10% = 1 cycle)
-        self._cycle_count: int = 0  # Total completed cycles
-        self._last_soc: Optional[float] = None  # Last recorded SOC
-        self._charge_accumulated: float = 0.0  # Accumulated charge % in current cycle
-        self._discharge_accumulated: float = 0.0  # Accumulated discharge % in current cycle
+        # Uses persistent binary storage to survive restarts
+        self._cycle_storage = CycleStorage("data/cycle_tracking.bin")
+        self._init_cycle_tracking()
         
         # DER Control components (initialized after connection)
         self._der_client: Optional[DERClient] = None
@@ -146,6 +163,53 @@ class BMSClient:
         self._subscription_manager: Optional[SubscriptionManager] = None
         self._notification_handler: Optional[NotificationHandler] = None
         self._time_sync_client: Optional[TimeSyncClient] = None
+        
+        # SQLite Database for IEEE 2030.5 resource persistence
+        self._db: Optional[IEEE2030_5Database] = None
+        self._db_path = getattr(config, 'database_path', 'data/ieee2030_5.db')
+        self._init_database()
+
+        # Persistent HTTP client for Supabase reporting (created on start, closed on stop)
+        self._supabase_client: Optional[httpx.AsyncClient] = None
+    
+    def _init_cycle_tracking(self) -> None:
+        """
+        Initialize cycle tracking from persistent storage.
+        
+        Loads previously saved cycle count and SOC tracking data
+        to continue from where we left off after restart.
+        """
+        saved_data = self._cycle_storage.load()
+        if saved_data:
+            self._cycle_count = saved_data.cycle_count
+            self._last_soc = saved_data.last_soc
+            self._charge_accumulated = saved_data.charge_accumulated
+            self._discharge_accumulated = saved_data.discharge_accumulated
+            logger.info(
+                f"Restored cycle tracking: cycles={self._cycle_count}, "
+                f"charge_acc={self._charge_accumulated:.2f}%, "
+                f"discharge_acc={self._discharge_accumulated:.2f}%, "
+                f"last_soc={self._last_soc}"
+            )
+        else:
+            # Initialize with defaults
+            self._cycle_count = 0
+            self._last_soc = None
+            self._charge_accumulated = 0.0
+            self._discharge_accumulated = 0.0
+            logger.info("Initialized new cycle tracking")
+            # Save initial state to create the file
+            self._save_cycle_tracking()
+    
+    def _save_cycle_tracking(self) -> None:
+        """Save current cycle tracking state to persistent storage."""
+        data = CycleTrackingData(
+            cycle_count=self._cycle_count,
+            charge_accumulated=self._charge_accumulated,
+            discharge_accumulated=self._discharge_accumulated,
+            last_soc=self._last_soc,
+        )
+        self._cycle_storage.save(data)
 
     @classmethod
     def from_config(cls, config_path: Union[str, Path]) -> "BMSClient":
@@ -170,6 +234,236 @@ class BMSClient:
     def latest_snapshot(self) -> Optional[BMSSnapshot]:
         """Get latest BMS snapshot."""
         return self.data_collector.latest_snapshot
+    
+    @property
+    def database(self) -> Optional[IEEE2030_5Database]:
+        """Get the SQLite database instance."""
+        return self._db
+    
+    @staticmethod
+    def _description_to_reading_key(description: str) -> Optional[str]:
+        """
+        Map MirrorMeterReading description to reading key.
+        
+        Args:
+            description: Reading description (e.g., "Battery Total Current")
+            
+        Returns:
+            Key for _reading_mrids dict, or None if not recognized
+        """
+        name = description.lower().replace(" ", "_")
+        if "soc" in name and "state" not in name:
+            return "soc"
+        elif "current" in name:
+            return "current"
+        elif "power" in name:
+            return "power"
+        elif "charge" in name and "discharge" not in name:
+            return "charge_energy"
+        elif "discharge" in name:
+            return "discharge_energy"
+        elif "max" in name and "temp" in name:
+            return "max_temperature"
+        elif "min" in name and "temp" in name:
+            return "min_temperature"
+        elif "avg" in name and "temp" in name:
+            return "avg_temperature"
+        elif "soh" in name:
+            return "soh"
+        elif "cycle" in name:
+            return "cycle_count"
+        return None
+    
+    def _cache_reading_mrids_from_server(self, readings: list) -> int:
+        """
+        Cache reading mRIDs from server response.
+        
+        Args:
+            readings: List of MirrorMeterReading objects from server
+            
+        Returns:
+            Number of mRIDs cached
+        """
+        cached_count = 0
+        for reading in readings:
+            logger.debug(f"Server reading: description={reading.description}, mRID={reading.mRID}, href={getattr(reading, 'href', None)}")
+            if reading.description and reading.mRID:
+                key = self._description_to_reading_key(reading.description)
+                if key:
+                    self._reading_mrids[key] = reading.mRID
+                    cached_count += 1
+                    logger.debug(f"Cached mRID: {key} -> {reading.mRID}")
+                else:
+                    logger.warning(f"Unknown reading description: {reading.description}")
+            else:
+                logger.warning(f"Reading missing mRID or description: desc={reading.description}, mRID={reading.mRID}")
+        return cached_count
+    
+    def _init_database(self) -> None:
+        """Initialize SQLite database for IEEE 2030.5 resource persistence."""
+        try:
+            self._db = init_database(self._db_path)
+            logger.info(f"Initialized IEEE 2030.5 database: {self._db_path}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize database: {e}")
+            self._db = None
+    
+    def _load_cached_resources(self) -> bool:
+        """
+        Load cached resources from SQLite database.
+        
+        Implements IEEE 2030.5 快速恢復模式 (Fast Recovery):
+        - 從資料庫載入已緩存的 EndDevice href
+        - 從資料庫載入已緩存的 DER href
+        - 從資料庫載入已緩存的 MirrorUsagePoint href
+        - 從資料庫載入已緩存的 MirrorMeterReading mRIDs
+        
+        Returns:
+            True if cached resources were found and loaded
+        """
+        if not self._db:
+            return False
+        
+        # Try to load EndDevice by sFDI
+        sfdi = self.ieee2030_5_client.sfdi
+        if sfdi:
+            cached_edev = self._db.get_end_device_by_sfdi(sfdi)
+            if cached_edev:
+                self._edev_href = cached_edev.href
+                logger.info(f"[Fast Recovery] Loaded cached EndDevice: {self._edev_href}")
+                
+                # Load cached DER
+                ders = self._db.get_ders_by_end_device(cached_edev.href)
+                if ders:
+                    self._der_path = ders[0].href
+                    logger.info(f"[Fast Recovery] Loaded cached DER: {self._der_path}")
+                
+                # Load cached MirrorUsagePoint
+                mups = self._db.get_mirror_usage_points_by_lfdi(self.ieee2030_5_client.lfdi or "")
+                if mups:
+                    self._mup_href = mups[0].href
+                    logger.info(f"[Fast Recovery] Loaded cached MirrorUsagePoint: {self._mup_href}")
+                    
+                    # Load cached MirrorMeterReading mRIDs
+                    readings = self._db.get_readings_by_mup(self._mup_href)
+                    if readings:
+                        for r in readings:
+                            if r.description and r.mrid:
+                                key = self._description_to_reading_key(r.description)
+                                if key:
+                                    self._reading_mrids[key] = r.mrid
+                        logger.info(f"[Fast Recovery] Loaded {len(self._reading_mrids)} cached reading mRIDs: {list(self._reading_mrids.keys())}")
+                
+                return True
+        
+        return False
+    
+    def _save_end_device_to_db(self, edev) -> None:
+        """Save EndDevice to SQLite database."""
+        if not self._db:
+            return
+        
+        try:
+            record = EndDeviceRecord(
+                href=edev.href or "",
+                lfdi=edev.lFDI,
+                sfdi=edev.sFDI,
+                changed_time=edev.changedTime,
+                enabled=edev.enabled,
+                der_list_link=edev.DERListLink if isinstance(edev.DERListLink, str) else (edev.DERListLink.href if edev.DERListLink else None),
+                device_information_link=edev.DeviceInformationLink if isinstance(edev.DeviceInformationLink, str) else (edev.DeviceInformationLink.href if edev.DeviceInformationLink else None),
+                fsa_list_link=edev.FunctionSetAssignmentsListLink if isinstance(edev.FunctionSetAssignmentsListLink, str) else (edev.FunctionSetAssignmentsListLink.href if edev.FunctionSetAssignmentsListLink else None),
+            )
+            self._db.save_end_device(record)
+            logger.debug(f"Saved EndDevice to database: {record.href}")
+        except Exception as e:
+            logger.warning(f"Failed to save EndDevice to database: {e}")
+    
+    def _save_der_to_db(self, der, end_device_href: str) -> None:
+        """Save DER to SQLite database."""
+        if not self._db:
+            return
+        
+        try:
+            record = DERRecord(
+                href=der.href or "",
+                mrid=der.mRID.hex() if der.mRID else None,
+                description=der.description,
+                version=der.version,
+                end_device_href=end_device_href,
+                der_capability_link=der.DERCapabilityLink if isinstance(der.DERCapabilityLink, str) else (der.DERCapabilityLink.href if der.DERCapabilityLink else None),
+                der_settings_link=der.DERSettingsLink if isinstance(der.DERSettingsLink, str) else (der.DERSettingsLink.href if der.DERSettingsLink else None),
+                der_status_link=der.DERStatusLink if isinstance(der.DERStatusLink, str) else (der.DERStatusLink.href if der.DERStatusLink else None),
+                der_availability_link=der.DERAvailabilityLink if isinstance(der.DERAvailabilityLink, str) else (der.DERAvailabilityLink.href if der.DERAvailabilityLink else None),
+            )
+            self._db.save_der(record)
+            logger.debug(f"Saved DER to database: {record.href}")
+        except Exception as e:
+            logger.warning(f"Failed to save DER to database: {e}")
+    
+    def _save_mup_to_db(self, mup) -> None:
+        """Save MirrorUsagePoint to SQLite database."""
+        if not self._db:
+            return
+        
+        try:
+            # Extract href from the MirrorUsagePoint object
+            href = getattr(mup, 'href', None) or self._mup_href or ""
+            
+            record = MirrorUsagePointRecord(
+                href=href,
+                mrid=getattr(mup, 'mRID', None) or "",
+                description=getattr(mup, 'description', None),
+                version=getattr(mup, 'version', None),
+                role_flags=getattr(mup, 'roleFlags', None),
+                service_category_kind=getattr(mup, 'serviceCategoryKind', None),
+                status=getattr(mup, 'status', None),
+                device_lfdi=getattr(mup, 'deviceLFDI', None) or self.ieee2030_5_client.lfdi or "",
+                post_rate=getattr(mup, 'postRate', None),
+            )
+            self._db.save_mirror_usage_point(record)
+            logger.debug(f"Saved MirrorUsagePoint to database: {record.href}")
+        except Exception as e:
+            logger.warning(f"Failed to save MirrorUsagePoint to database: {e}")
+
+    def _save_meter_readings_to_db(self, mup_href: str, readings: list) -> None:
+        """
+        Save MirrorMeterReadings to SQLite database.
+        
+        Args:
+            mup_href: The href of the parent MirrorUsagePoint
+            readings: List of MirrorMeterReading objects from server
+        """
+        if not self._db:
+            return
+        
+        saved_count = 0
+        for reading in readings:
+            try:
+                # Extract reading type info
+                reading_type = getattr(reading, 'ReadingType', None)
+                
+                record = MirrorMeterReadingRecord(
+                    mup_href=mup_href,
+                    href=getattr(reading, 'href', None),
+                    mrid=getattr(reading, 'mRID', None),
+                    description=getattr(reading, 'description', None),
+                    reading_type_href=getattr(reading_type, 'href', None) if reading_type else None,
+                    accumulation_behaviour=getattr(reading_type, 'accumulationBehaviour', 0) if reading_type else 0,
+                    commodity=getattr(reading_type, 'commodity', 1) if reading_type else 1,
+                    data_qualifier=getattr(reading_type, 'dataQualifier', 0) if reading_type else 0,
+                    flow_direction=getattr(reading_type, 'flowDirection', 0) if reading_type else 0,
+                    kind=getattr(reading_type, 'kind', 0) if reading_type else 0,
+                    phase=getattr(reading_type, 'phase', None) if reading_type else None,
+                    power_of_ten_multiplier=getattr(reading_type, 'powerOfTenMultiplier', 0) if reading_type else 0,
+                    uom=getattr(reading_type, 'uom', 0) if reading_type else 0,
+                )
+                self._db.save_mirror_meter_reading(record)
+                saved_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to save MirrorMeterReading to database: {e}")
+        
+        logger.info(f"Saved {saved_count} MirrorMeterReadings to database for MUP: {mup_href}")
 
     def add_callback(self, callback: Callable[[BMSSnapshot], None]) -> None:
         """Add callback for new BMS data."""
@@ -205,39 +499,80 @@ class BMSClient:
 
         # Register with server (or find existing device)
         if self.auto_register:
-            logger.info("Checking for existing EndDevice by sFDI...")
-            try:
-                # First check if device already exists
-                existing_edev = await self.ieee2030_5_client.find_end_device_by_sfdi()
+            # =========================================================================
+            # IEEE 2030.5 Device Registration Flow
+            # =========================================================================
+            # 1. Fast Recovery: Try to use cached resources from database
+            # 2. Resource Validation: Verify cached resources exist on server
+            # 3. Full Registration: If validation fails, perform full registration
+            # =========================================================================
+            
+            # Step 1: Try Fast Recovery from SQLite cache
+            if self._load_cached_resources():
+                logger.info("=" * 60)
+                logger.info("[IEEE 2030.5 Fast Recovery] Using cached resources from database")
+                logger.info("=" * 60)
                 
-                if existing_edev:
-                    logger.info(f"Found existing EndDevice: {existing_edev.href}")
-                    self._edev_href = existing_edev.href
-                else:
-                    # Register new device
-                    logger.info("No existing device found, registering new EndDevice...")
-                    end_device = await self.ieee2030_5_client.register_end_device(
-                        pin=self.config.ieee2030_5.pin
-                    )
-                    logger.info(f"Registered end device: {end_device.href}")
-                    self._edev_href = end_device.href
-                
-                # Get or create DER resource and build complete path
-                if self._edev_href:
-                    logger.info("Getting or creating DER resource...")
-                    der = await self.ieee2030_5_client.get_or_create_der(
-                        description="CUBE Battery Management System"
-                    )
-                    if der and der.href:
-                        self._der_path = der.href
-                        logger.info(f"Using DER path: {self._der_path}")
+                # Step 2: Resource Validation - verify cached EndDevice exists on server
+                try:
+                    existing_edev = await self.ieee2030_5_client.find_end_device_by_sfdi()
+                    if existing_edev and existing_edev.href == self._edev_href:
+                        logger.info(f"[Fast Recovery] EndDevice verified on server - 200 OK: {self._edev_href}")
+                        self.ieee2030_5_client._end_device = existing_edev
                     else:
-                        logger.warning("Could not get or create DER resource")
+                        logger.info("[Fast Recovery] EndDevice not found on server (404), switching to Full Registration...")
+                        self._edev_href = None
+                        self._der_path = None
+                        self._mup_href = None
+                        self._reading_mrids.clear()
+                except Exception as e:
+                    logger.warning(f"[Fast Recovery] Resource validation failed: {e}, switching to Full Registration...")
+                    self._edev_href = None
+                    self._der_path = None
+                    self._mup_href = None
+                    self._reading_mrids.clear()
+            
+            # Step 3: Full Registration if Fast Recovery failed or no cache
+            if not self._edev_href:
+                logger.info("=" * 60)
+                logger.info("[IEEE 2030.5 Full Registration] Starting device registration...")
+                logger.info("=" * 60)
+                logger.info("[Full Registration] Checking for existing EndDevice by sFDI...")
+                try:
+                    # First check if device already exists
+                    existing_edev = await self.ieee2030_5_client.find_end_device_by_sfdi()
                     
-            except Exception as e:
-                logger.warning(f"Registration/lookup failed: {e}")
-                import traceback
-                traceback.print_exc()
+                    if existing_edev:
+                        logger.info(f"Found existing EndDevice: {existing_edev.href}")
+                        self._edev_href = existing_edev.href
+                        self._save_end_device_to_db(existing_edev)
+                    else:
+                        # Register new device
+                        logger.info("No existing device found, registering new EndDevice...")
+                        end_device = await self.ieee2030_5_client.register_end_device(
+                            pin=self.config.ieee2030_5.pin
+                        )
+                        logger.info(f"Registered end device: {end_device.href}")
+                        self._edev_href = end_device.href
+                        self._save_end_device_to_db(end_device)
+                    
+                    # Get or create DER resource and build complete path
+                    if self._edev_href and not self._der_path:
+                        logger.info("Getting or creating DER resource...")
+                        der = await self.ieee2030_5_client.get_or_create_der(
+                            description="CUBE Battery Management System"
+                        )
+                        if der and der.href:
+                            self._der_path = der.href
+                            logger.info(f"Using DER path: {self._der_path}")
+                            self._save_der_to_db(der, self._edev_href)
+                        else:
+                            logger.warning("Could not get or create DER resource")
+                        
+                except Exception as e:
+                    logger.warning(f"Registration/lookup failed: {e}")
+                    import traceback
+                    traceback.print_exc()
 
         # Register MirrorUsagePoint (meter) for metering data
         if self.enable_metering:
@@ -280,11 +615,12 @@ class BMSClient:
         self._reporting_task = asyncio.create_task(self._reporting_loop())
 
         # Start metering task if enabled
-        if self.enable_metering and self._mup_href:
-            self._metering_task = asyncio.create_task(self._metering_loop())
-
-        # Start battery status reporting to Supabase
-        self._battery_status_task = asyncio.create_task(self._battery_status_loop())
+        if self.enable_metering:
+            if self._mup_href:
+                logger.info(f"Starting metering task with MUP: {self._mup_href}")
+                self._metering_task = asyncio.create_task(self._metering_loop())
+            else:
+                logger.warning("Metering enabled but no MirrorUsagePoint href available - metering task NOT started")
 
         # Start DER Control - either subscription-based or polling-based
         if self._enable_subscription:
@@ -320,20 +656,21 @@ class BMSClient:
                 pass
             self._metering_task = None
 
-        # Stop battery status task
-        if self._battery_status_task:
-            self._battery_status_task.cancel()
-            try:
-                await self._battery_status_task
-            except asyncio.CancelledError:
-                pass
-            self._battery_status_task = None
-
         # Stop DER Control
         if self._der_client:
             await self._der_client.stop()
             self._der_client = None
             logger.info("DER Control stopped")
+
+        # Disconnect PCS Modbus client if separate from BMS
+        pcs_client = getattr(self, '_pcs_modbus_client', None)
+        if pcs_client:
+            try:
+                await pcs_client.disconnect()
+                logger.info("PCS Modbus client disconnected")
+            except Exception as e:
+                logger.warning(f"Error disconnecting PCS Modbus: {e}")
+            self._pcs_modbus_client = None
 
         # Stop subscription components
         await self._stop_subscription_control()
@@ -347,6 +684,101 @@ class BMSClient:
 
         logger.info("BMS Client stopped")
 
+    async def _init_power_controller(self) -> SafePowerController:
+        """
+        Initialize SafePowerController from runtime config or env.
+        
+        If runtime config has power_control section, uses that.
+        Otherwise falls back to environment variable based config.
+        Also creates and wires ModbusPowerWriter for non-simulation modes.
+        
+        Returns:
+            SafePowerController instance
+        """
+        # Try runtime config first
+        runtime_config = getattr(self, '_runtime_config', None)
+        if runtime_config and hasattr(runtime_config, 'power_control'):
+            rt_pc = runtime_config.power_control
+            controller = create_power_controller_from_runtime(rt_pc)
+            
+            # For non-simulation modes, create and wire PCS Modbus writer
+            if not rt_pc.is_simulation:
+                try:
+                    from pymodbus.client import AsyncModbusTcpClient
+                    
+                    pcs_modbus = rt_pc.pcs_modbus
+                    
+                    # Create dedicated PCS Modbus client (separate from BMS)
+                    pcs_client_wrapper = ModbusBMSClient(
+                        host=pcs_modbus.host,
+                        port=pcs_modbus.port,
+                        unit_id=pcs_modbus.unit_id,
+                        timeout=pcs_modbus.timeout,
+                        rack_count=0,
+                    )
+                    
+                    # Connect to PCS
+                    connected = await pcs_client_wrapper.connect()
+                    if not connected:
+                        logger.error(
+                            f"Failed to connect to PCS at "
+                            f"{pcs_modbus.host}:{pcs_modbus.port}"
+                        )
+                    else:
+                        logger.info(
+                            f"Connected to PCS Modbus at "
+                            f"{pcs_modbus.host}:{pcs_modbus.port}"
+                        )
+                    
+                    # Configure PCS register addresses from runtime config
+                    PCSRegisterAddress.POWER_SETPOINT = rt_pc.registers.power_setpoint
+                    PCSRegisterAddress.POWER_SETPOINT_HIGH = rt_pc.registers.power_setpoint_high
+                    PCSRegisterAddress.OPERATION_MODE = rt_pc.registers.operation_mode
+                    PCSRegisterAddress.ENABLE_CONTROL = rt_pc.registers.enable_control
+                    PCSRegisterAddress.ACTUAL_POWER = rt_pc.registers.actual_power
+                    PCSRegisterAddress.OPERATION_STATUS = rt_pc.registers.operation_status
+                    PCSRegisterAddress.ERROR_CODE = rt_pc.registers.error_code
+                    
+                    # Create ModbusPowerWriter config
+                    writer_config = ModbusPowerWriterConfig(
+                        power_setpoint_address=rt_pc.registers.power_setpoint,
+                        use_32bit_power=rt_pc.use_32bit,
+                        power_scale_factor=rt_pc.power_scale_factor,
+                        verify_after_write=rt_pc.verify_after_write,
+                    )
+                    
+                    # Create power writer (uses its own SafePowerController internally
+                    # but we bypass that by calling set_power directly)
+                    power_writer = ModbusPowerWriter(
+                        modbus_client=pcs_client_wrapper,
+                        power_controller=controller,
+                        config=writer_config,
+                    )
+                    
+                    # Inject writer into controller
+                    controller.set_pcs_writer(power_writer)
+                    
+                    # Store reference for cleanup
+                    self._pcs_modbus_client = pcs_client_wrapper
+                    
+                    logger.info(
+                        f"PCS ModbusPowerWriter configured: "
+                        f"setpoint_reg={rt_pc.registers.power_setpoint}, "
+                        f"scale={rt_pc.power_scale_factor}, "
+                        f"32bit={rt_pc.use_32bit}"
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Failed to initialize PCS writer: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            return controller
+        
+        # Fallback: env-based config
+        power_config = PowerControlConfig.from_env()
+        return SafePowerController(power_config)
+
     async def _start_der_control(self) -> None:
         """
         Initialize and start DER Control polling.
@@ -357,16 +789,15 @@ class BMSClient:
         - DERControl event execution
         - Response reporting
         
-        ⚠️ Safety: Power control runs in simulation mode by default
+        ⚠️ Safety: Power control mode determined by runtime config
         """
         try:
-            # Initialize SafePowerController (simulation mode by default)
-            power_config = PowerControlConfig.from_env()
-            self._power_controller = SafePowerController(power_config)
+            # Initialize power controller (runtime config aware)
+            self._power_controller = await self._init_power_controller()
             
             logger.info(
                 f"SafePowerController initialized "
-                f"(simulation_mode={power_config.simulation_mode})"
+                f"(mode={self._power_controller.control_mode.value})"
             )
             
             # Initialize DERClient config
@@ -411,16 +842,15 @@ class BMSClient:
         - Time synchronization (mandatory polling for /tm)
         - Automatic subscription renewal
         
-        ⚠️ Safety: Power control runs in simulation mode by default
+        ⚠️ Safety: Power control mode determined by runtime config
         """
         try:
-            # Initialize SafePowerController (simulation mode by default)
-            power_config = PowerControlConfig.from_env()
-            self._power_controller = SafePowerController(power_config)
+            # Initialize power controller (runtime config aware)
+            self._power_controller = await self._init_power_controller()
             
             logger.info(
                 f"SafePowerController initialized "
-                f"(simulation_mode={power_config.simulation_mode})"
+                f"(mode={self._power_controller.control_mode.value})"
             )
             
             # Get TLS certificate paths from config
@@ -676,8 +1106,9 @@ class BMSClient:
         Register MirrorUsagePoint (meter) with IEEE 2030.5 server.
         
         Uses multi-step process required by the server:
-        1. POST MirrorUsagePoint without MirrorMeterReading
-        2. POST each MirrorMeterReading individually to the MUP
+        1. Check if cached MUP exists in database
+        2. POST MirrorUsagePoint without MirrorMeterReading
+        3. POST each MirrorMeterReading individually to the MUP
         
         Creates meter readings for:
         - Total Current (A)
@@ -688,7 +1119,42 @@ class BMSClient:
         - Min Temperature (°C)
         - Avg Temperature (°C)
         """
-        logger.info("Registering MirrorUsagePoint (meter)...")
+        # First check if we have cached MUP from database
+        if self._mup_href:
+            logger.info(f"[Fast Recovery] Verifying cached MirrorUsagePoint: {self._mup_href}")
+            try:
+                # Verify it exists on server (IEEE 2030.5 資源有效性驗證)
+                existing_mup = await self.ieee2030_5_client.get_mirror_usage_point(self._mup_href)
+                if existing_mup:
+                    logger.info(f"[Fast Recovery] MirrorUsagePoint verified on server - 200 OK")
+                    # Fetch MirrorMeterReadingList from sub-resource /mmr
+                    try:
+                        mmr_list = await self.ieee2030_5_client.get_mirror_meter_reading_list(self._mup_href)
+                        server_readings = mmr_list.MirrorMeterReading if mmr_list else []
+                    except Exception as e:
+                        logger.warning(f"[Fast Recovery] Could not fetch MirrorMeterReadingList: {e}")
+                        server_readings = existing_mup.MirrorMeterReading or []
+                    # Re-cache reading mRIDs and update database
+                    if server_readings:
+                        cached_count = self._cache_reading_mrids_from_server(server_readings)
+                        # Update database with latest readings
+                        self._save_meter_readings_to_db(self._mup_href, server_readings)
+                        logger.info(f"[Fast Recovery] Synced {cached_count} reading mRIDs from server: {list(self._reading_mrids.keys())}")
+                    return
+                else:
+                    logger.info("[Fast Recovery] MirrorUsagePoint not found on server (404), re-registering...")
+                    # Clear old cache from database
+                    if self._db:
+                        self._db.delete_mirror_usage_point(self._mup_href)
+                        logger.info(f"[Fast Recovery] Cleared stale MUP cache from database: {self._mup_href}")
+                    self._mup_href = None
+                    self._reading_mrids.clear()
+            except Exception as e:
+                logger.info(f"[Fast Recovery] Could not verify cached MirrorUsagePoint: {e}, re-registering...")
+                self._mup_href = None
+                self._reading_mrids.clear()
+        
+        logger.info("[Full Registration] Creating new MirrorUsagePoint (meter)...")
         
         try:
             # Step 1: Create MirrorUsagePoint WITHOUT MirrorMeterReading
@@ -728,30 +1194,33 @@ class BMSClient:
             # Fetch the updated resource to cache reading mRIDs
             created_mup = await self.ieee2030_5_client.get_mirror_usage_point(self._mup_href)
             
-            # Cache reading mRIDs for future updates
-            if created_mup and created_mup.MirrorMeterReading:
-                for reading in created_mup.MirrorMeterReading:
-                    if reading.description and reading.mRID:
-                        # Map description to mRID
-                        name = reading.description.lower().replace(" ", "_")
-                        if "soc" in name:
-                            self._reading_mrids["soc"] = reading.mRID
-                        elif "current" in name:
-                            self._reading_mrids["current"] = reading.mRID
-                        elif "power" in name:
-                            self._reading_mrids["power"] = reading.mRID
-                        elif "charge" in name and "discharge" not in name:
-                            self._reading_mrids["charge_energy"] = reading.mRID
-                        elif "discharge" in name:
-                            self._reading_mrids["discharge_energy"] = reading.mRID
-                        elif "max" in name and "temp" in name:
-                            self._reading_mrids["max_temperature"] = reading.mRID
-                        elif "min" in name and "temp" in name:
-                            self._reading_mrids["min_temperature"] = reading.mRID
-                        elif "avg" in name and "temp" in name:
-                            self._reading_mrids["avg_temperature"] = reading.mRID
+            # Fetch MirrorMeterReadingList from sub-resource /mmr
+            server_readings = []
+            try:
+                mmr_list = await self.ieee2030_5_client.get_mirror_meter_reading_list(self._mup_href)
+                if mmr_list and mmr_list.MirrorMeterReading:
+                    server_readings = mmr_list.MirrorMeterReading
+            except Exception as e:
+                logger.warning(f"Could not fetch MirrorMeterReadingList: {e}")
+                # Fallback to inline readings if available
+                if created_mup and created_mup.MirrorMeterReading:
+                    server_readings = created_mup.MirrorMeterReading
             
-            logger.info(f"Registered MirrorUsagePoint with {len(self._reading_mrids)} readings at: {self._mup_href}")
+            # Cache reading mRIDs for future updates
+            if server_readings:
+                cached_count = self._cache_reading_mrids_from_server(server_readings)
+                logger.info(f"Registered MirrorUsagePoint with {cached_count} readings at: {self._mup_href}")
+                logger.info(f"Cached reading mRIDs: {list(self._reading_mrids.keys())}")
+            else:
+                logger.info(f"Registered MirrorUsagePoint at: {self._mup_href} (no readings returned)")
+            
+            # Save MUP to database for caching
+            if created_mup:
+                self._save_mup_to_db(created_mup)
+            
+            # Save MirrorMeterReadings to database for caching
+            if server_readings:
+                self._save_meter_readings_to_db(self._mup_href, server_readings)
             
         except Exception as e:
             logger.warning(f"Failed to register MirrorUsagePoint: {e}")
@@ -782,74 +1251,16 @@ class BMSClient:
         """Upload current BMS meter readings to IEEE 2030.5 server."""
         snapshot = self.latest_snapshot
         if not snapshot:
-            logger.debug("No BMS data available for metering")
+            logger.warning("No BMS data available for metering")
             return
 
         if not self._mup_href:
-            logger.debug("No MirrorUsagePoint href available")
+            logger.warning("No MirrorUsagePoint href available - skipping meter upload")
             return
 
-        # Convert BMS snapshot to meter readings
-        readings = self.adapter.snapshot_to_meter_readings(
-            snapshot,
-            reading_mrids=self._reading_mrids,
-        )
-
-        # Upload all readings as a list
-        logger.debug(
-            f"Uploading meter readings: SOC={snapshot.system.total_soc:.1f}%, "
-            f"Current={snapshot.system.total_current:.1f}A, "
-            f"Power={snapshot.system.total_power:.1f}kW"
-        )
-        
-        if readings:
-            success = await self.ieee2030_5_client.post_mirror_meter_reading_list(
-                self._mup_href,
-                readings,
-            )
-            if success:
-                logger.debug(f"Uploaded {len(readings)} meter readings as list")
-            else:
-                logger.warning("Failed to upload meter readings as list")
-
-    async def _battery_status_loop(self) -> None:
-        """
-        Battery status reporting loop.
-        
-        Periodically sends battery health metrics (SOH, cycles) to Supabase.
-        Sends every 5 minutes (300 seconds).
-        """
-        import httpx
-        
-        interval = 300  # 5 minutes
-        supabase_url = "https://tspjubrehulrjhreptva.supabase.co/functions/v1/battery-status"
-        
-        logger.info(f"Starting battery status reporting loop (interval: {interval}s)")
-        
-        while self._running:
-            try:
-                await self._send_battery_status(supabase_url)
-            except Exception as e:
-                logger.error(f"Battery status reporting error: {e}")
-
-            await asyncio.sleep(interval)
-
-    async def _send_battery_status(self, url: str) -> None:
-        """Send battery status to Supabase endpoint."""
-        import httpx
-        
-        # Get device LFDI
-        lfdi = self.ieee2030_5_client.lfdi
-        if not lfdi:
-            logger.warning("Cannot send battery status: LFDI not available")
-            return
-        
-        # Get latest snapshot for real data
-        snapshot = self.latest_snapshot
-        
-        # Calculate average SOH from all active racks
-        soh = 80.0  # Default value
-        if snapshot and snapshot.active_racks:
+        # Calculate SOH from active racks and update cycle tracking
+        soh = None
+        if snapshot.active_racks:
             soh = sum(r.soh for r in snapshot.active_racks) / len(snapshot.active_racks)
             
             # Update cycle tracking based on SOC changes
@@ -873,32 +1284,228 @@ class BMSClient:
                     logger.info(f"Cycle completed! Total cycles: {self._cycle_count}")
             
             self._last_soc = current_soc
+            
+            # Save cycle tracking data to persistent storage
+            self._save_cycle_tracking()
+
+        # Log reading mRIDs status for debugging
+        if self._reading_mrids:
+            logger.debug(f"Using cached reading mRIDs: {list(self._reading_mrids.keys())}")
+        else:
+            logger.warning("No cached reading mRIDs available - new mRIDs will be generated!")
+
+        # Convert BMS snapshot to meter readings (including SOH and cycle_count)
+        readings = self.adapter.snapshot_to_meter_readings(
+            snapshot,
+            reading_mrids=self._reading_mrids,
+            soh=soh,
+            cycle_count=self._cycle_count,
+        )
         
-        payload = {
-            "lfdi": lfdi,
-            "cycles": self._cycle_count,
-            "soh": round(soh, 2)
+        # Log actual mRIDs used
+        if readings and logger.isEnabledFor(logging.DEBUG):
+            mrid_list = [(r.description, r.mRID) for r in readings]
+            logger.debug(f"Meter readings mRIDs: {mrid_list}")
+
+        # Upload all readings as a list
+        logger.info(
+            f"Uploading meter readings to {self._mup_href}: "
+            f"SOC={snapshot.system.total_soc:.1f}%, "
+            f"Current={snapshot.system.total_current:.1f}A, "
+            f"Power={snapshot.system.total_power:.1f}kW, "
+            f"SOH={soh:.1f}% " if soh else ""
+            f"Cycles={self._cycle_count}, "
+            f"readings_count={len(readings)}"
+        )
+        
+        if readings:
+            success = await self.ieee2030_5_client.post_mirror_meter_reading_list(
+                self._mup_href,
+                readings,
+            )
+            
+            # Record to data recorder
+            self._record_meter_upload(readings, success)
+            
+            if success:
+                logger.info(f"Successfully uploaded {len(readings)} meter readings")
+            else:
+                logger.warning("Failed to upload meter readings as list")
+        else:
+            logger.warning("No readings generated from snapshot")
+    
+    def _record_meter_upload(self, readings: list, success: bool) -> None:
+        """Record meter types to SQLite and update in-memory counter."""
+        reading_dicts = []
+        
+        # Map UOM code to type name
+        uom_to_type = {
+            5: "Current",           # A (安培)
+            6: "Temperature",       # Kelvin
+            23: "Temperature",      # °C
+            29: "Voltage",          # V
+            31: "Energy",           # J (焦耳)
+            33: "Frequency",        # Hz
+            38: "Power",            # W (實功)
+            42: "Volume",           # m³
+            61: "Power",            # VA (視在功率)
+            63: "Power",            # var (虛功)
+            65: "Power Factor",     # CosTheta
+            67: "Voltage",          # V²
+            69: "Current",          # A²
+            71: "Energy",           # VAh (視在能量)
+            72: "Energy",           # Wh (實功能量)
+            73: "Energy",           # varh (虛功能量)
+            106: "Capacity",        # Ah (安培小時)
+            119: "Volume",          # ft³
+            122: "Flow Rate",       # ft³/h
+            125: "Flow Rate",       # m³/h
+            128: "Volume",          # US gl
+            129: "Flow Rate",       # US gl/h
+            130: "Volume",          # IMP gl
+            131: "Flow Rate",       # IMP gl/h
+            132: "Energy",          # BTU
+            133: "Power",           # BTU/h
+            134: "Volume",          # Liter
+            137: "Flow Rate",       # L/h
+            140: "Pressure",        # PA(gauge)
+            155: "Pressure",        # PA(absolute)
+            169: "Energy",          # Therm
         }
         
+        for r in readings:
+            # Extract reading type info
+            reading_uom = None
+            reading_uom_name = None
+            reading_kind = 0
+            reading_type = None
+            reading_mrid = None
+            reading_flow_direction = 0
+            reading_accumulation_behaviour = 0
+            reading_power_of_ten_multiplier = 0
+            reading_commodity = 1
+            
+            # Get mRID from MirrorMeterReading
+            reading_mrid = getattr(r, "mRID", None)
+            
+            if hasattr(r, "ReadingType") and r.ReadingType:
+                rt = r.ReadingType
+                reading_uom = getattr(rt, "uom", None)
+                reading_kind = getattr(rt, "kind", 0) or 0
+                reading_flow_direction = getattr(rt, "flowDirection", 0) or 0
+                reading_accumulation_behaviour = getattr(rt, "accumulationBehaviour", 0) or 0
+                reading_power_of_ten_multiplier = getattr(rt, "powerOfTenMultiplier", 0) or 0
+                reading_commodity = getattr(rt, "commodity", 1) or 1
+                # Map UOM code to readable name (IEEE 2030.5 Table)
+                if reading_uom is not None:
+                    uom_names = {
+                        0: "N/A",           # Not Applicable
+                        5: "A",             # 安培 (RMS)
+                        6: "K",             # Kelvin
+                        23: "°C",           # 攝氏度
+                        29: "V",            # 電壓
+                        31: "J",            # 焦耳
+                        33: "Hz",           # 頻率
+                        38: "W",            # 實功功率
+                        42: "m³",           # 體積
+                        61: "VA",           # 視在功率
+                        63: "var",          # 虛功功率
+                        65: "cosθ",         # 功率因數
+                        67: "V²",           # 伏特平方
+                        69: "A²",           # 安培平方
+                        71: "VAh",          # 視在能量
+                        72: "Wh",           # 實功能量
+                        73: "varh",         # 虛功能量
+                        106: "Ah",          # 安培小時
+                        119: "ft³",         # 立方英尺
+                        122: "ft³/h",       # 立方英尺/小時
+                        125: "m³/h",        # 立方公尺/小時
+                        128: "US gal",      # 美制加侖
+                        129: "US gal/h",    # 美制加侖/小時
+                        130: "IMP gal",     # 英制加侖
+                        131: "IMP gal/h",   # 英制加侖/小時
+                        132: "BTU",         # 英熱單位
+                        133: "BTU/h",       # 英熱單位/小時
+                        134: "L",           # 公升
+                        137: "L/h",         # 公升/小時
+                        140: "Pa(g)",       # 表壓力
+                        155: "Pa(a)",       # 絕對壓力
+                        169: "thm",         # Therm
+                    }
+                    reading_uom_name = uom_names.get(reading_uom, f"UOM({reading_uom})")
+                    reading_type = uom_to_type.get(reading_uom, "Measurement")
+            
+            # Get description from MirrorMeterReading
+            description = getattr(r, "description", None) or ""
+            
+            # Get value and timestamp from Reading
+            reading_value = None
+            reading_timestamp = None
+            
+            if hasattr(r, "Reading") and r.Reading:
+                reading_obj = r.Reading
+                reading_value = getattr(reading_obj, "value", None)
+                # Get timestamp from timePeriod if available
+                if hasattr(reading_obj, "timePeriod") and reading_obj.timePeriod:
+                    tp = reading_obj.timePeriod
+                    start_time = getattr(tp, "start", None)
+                    if start_time:
+                        from datetime import datetime
+                        try:
+                            reading_timestamp = datetime.fromtimestamp(start_time).isoformat()
+                        except:
+                            reading_timestamp = str(start_time)
+            
+            # If no Reading, check lastUpdateTime
+            if reading_timestamp is None:
+                last_update = getattr(r, "lastUpdateTime", None)
+                if last_update:
+                    from datetime import datetime
+                    try:
+                        reading_timestamp = datetime.fromtimestamp(last_update).isoformat()
+                    except:
+                        reading_timestamp = str(last_update)
+            
+            if description:
+                reading_dicts.append({
+                    "type": reading_type or "Measurement",
+                    "description": description,
+                    "mrid": reading_mrid,
+                    "value": reading_value,
+                    "uom": reading_uom_name or "N/A",
+                    "uom_code": reading_uom,
+                    "kind": reading_kind,
+                    "commodity": reading_commodity,
+                    "flow_direction": reading_flow_direction,
+                    "accumulation_behaviour": reading_accumulation_behaviour,
+                    "power_of_ten_multiplier": reading_power_of_ten_multiplier,
+                    "timestamp": reading_timestamp,
+                })
+        
+        # Record to in-memory data recorder (for stats counter)
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(
-                    url,
-                    json=payload,
-                    headers={"Content-Type": "application/json"}
-                )
-                
-                if response.status_code in (200, 201):
-                    logger.info(
-                        f"Battery status sent successfully: LFDI={lfdi}, "
-                        f"SOH={payload['soh']:.2f}%, Cycles={self._cycle_count}"
-                    )
-                else:
-                    logger.warning(
-                        f"Battery status upload failed: {response.status_code} - {response.text}"
-                    )
+            from bms_2030_5_client.web.data_recorder import get_data_recorder
+            recorder = get_data_recorder()
+            recorder.record_meter_upload(
+                mup_href=self._mup_href or "",
+                description="BMS Meter Readings",
+                readings=reading_dicts,
+                status_code=200 if success else 500,
+                success=success,
+            )
         except Exception as e:
-            logger.error(f"Failed to send battery status: {e}")
+            logger.debug(f"Failed to record to data_recorder: {e}")
+        
+        # Record meter types to SQLite database (persistent, no values)
+        try:
+            if self._db and self._mup_href and reading_dicts:
+                types_count = self._db.update_meter_types_from_readings(
+                    self._mup_href, reading_dicts
+                )
+                if types_count > 0:
+                    logger.debug(f"Updated {types_count} meter types in SQLite")
+        except Exception as e:
+            logger.debug(f"Failed to save meter types to SQLite: {e}")
 
     async def get_battery_status(self) -> Optional[BMSSnapshot]:
         """

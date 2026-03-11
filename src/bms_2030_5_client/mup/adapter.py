@@ -3,8 +3,9 @@ MirrorUsagePoint adapter for converting BMS data to meter readings.
 """
 
 import logging
+import uuid
 from datetime import datetime
-from typing import Optional, List
+from typing import Dict, Optional, List
 
 from bms_2030_5_client.models import (
     BMSSnapshot,
@@ -22,6 +23,7 @@ from bms_2030_5_client.models import (
     ServiceKind,
     RoleFlagsType,
 )
+from bms_2030_5_client.models.ieee2030_5_models import DEFAULT_IANA_PEN
 
 logger = logging.getLogger(__name__)
 
@@ -33,19 +35,50 @@ class MirrorUsagePointAdapter:
     Focuses on single DER meter representation.
     """
 
-    def __init__(self):
-        """Initialize adapter."""
-        self._mrid_counter = 0  # Counter for sequential MRID generation
+    # IANA PEN suffix (8 hex chars) appended to every mRID
+    _IANA_PEN_HEX = f"{DEFAULT_IANA_PEN:08X}"
+
+    def __init__(self, device_lfdi: str = ""):
+        """Initialize adapter.
+        
+        Args:
+            device_lfdi: Device LFDI for generating unique but stable mRIDs
+        """
+        self._device_lfdi = device_lfdi
+        # In-memory cache: reading_key -> mRID (stable within one run)
+        self._cached_mrids: Dict[str, str] = {}
 
     def _generate_mrid(self) -> str:
         """
-        Generate a unique mRID for meter resources.
-        Uses sequential numbering starting from 1, incrementing for each registration.
+        Generate a new mRID conforming to IEEE 2030.5 mRIDType.
+
+        Format: [UUID4 96-bit (24 hex chars)][IANA PEN 32-bit (8 hex chars)]
+        Total: 128-bit = 32 hex characters.
+
+        Returns:
+            32-character uppercase hex string mRID
         """
-        self._mrid_counter += 1
-        # Generate 32-character hex string with sequential number
-        # Format: zero-padded to 32 hex characters
-        return f"{self._mrid_counter:032X}"
+        unique_id = uuid.uuid4().hex[:24].upper()
+        return unique_id + self._IANA_PEN_HEX
+
+    def _generate_stable_mrid(self, reading_key: str) -> str:
+        """
+        Generate or retrieve a cached mRID for a reading type.
+
+        On first call for a given *reading_key*, a new UUID+PEN mRID is
+        generated and cached in memory.  Subsequent calls within the same
+        process lifetime return the same value, keeping uploads consistent
+        until the server-assigned mRID is persisted to the database.
+
+        Args:
+            reading_key: Key for the reading type (e.g., 'current', 'power')
+
+        Returns:
+            32-character uppercase hex string mRID
+        """
+        if reading_key not in self._cached_mrids:
+            self._cached_mrids[reading_key] = self._generate_mrid()
+        return self._cached_mrids[reading_key]
 
     def create_mirror_usage_point(
         self,
@@ -85,6 +118,8 @@ class MirrorUsagePointAdapter:
                 self._create_max_temperature_reading_type(),
                 self._create_min_temperature_reading_type(),
                 self._create_avg_temperature_reading_type(),
+                self._create_soh_reading_type(),
+                self._create_cycle_count_reading_type(),
             ]
         
         mup = MirrorUsagePoint(
@@ -103,7 +138,7 @@ class MirrorUsagePointAdapter:
     def _create_soc_reading_type(self) -> MirrorMeterReading:
         """Create MirrorMeterReading for SOC (State of Charge)."""
         return MirrorMeterReading(
-            mRID=self._generate_mrid(),
+            mRID=self._generate_stable_mrid("soc"),
             description="Battery SOC",
             version=1,
             ReadingType=ReadingType(
@@ -120,7 +155,7 @@ class MirrorUsagePointAdapter:
     def _create_current_reading_type(self) -> MirrorMeterReading:
         """Create MirrorMeterReading for Total Current."""
         return MirrorMeterReading(
-            mRID=self._generate_mrid(),
+            mRID=self._generate_stable_mrid("current"),
             description="Battery Total Current",
             version=1,
             ReadingType=ReadingType(
@@ -137,7 +172,7 @@ class MirrorUsagePointAdapter:
     def _create_power_reading_type(self) -> MirrorMeterReading:
         """Create MirrorMeterReading for Total Power."""
         return MirrorMeterReading(
-            mRID=self._generate_mrid(),
+            mRID=self._generate_stable_mrid("power"),
             description="Battery Total Power",
             version=1,
             ReadingType=ReadingType(
@@ -154,7 +189,7 @@ class MirrorUsagePointAdapter:
     def _create_charge_energy_reading_type(self) -> MirrorMeterReading:
         """Create MirrorMeterReading for Charge Energy (kWh)."""
         return MirrorMeterReading(
-            mRID=self._generate_mrid(),
+            mRID=self._generate_stable_mrid("charge_energy"),
             description="Battery Charge Energy",
             version=1,
             ReadingType=ReadingType(
@@ -171,7 +206,7 @@ class MirrorUsagePointAdapter:
     def _create_discharge_energy_reading_type(self) -> MirrorMeterReading:
         """Create MirrorMeterReading for Discharge Energy (kWh)."""
         return MirrorMeterReading(
-            mRID=self._generate_mrid(),
+            mRID=self._generate_stable_mrid("discharge_energy"),
             description="Battery Discharge Energy",
             version=1,
             ReadingType=ReadingType(
@@ -188,7 +223,7 @@ class MirrorUsagePointAdapter:
     def _create_max_temperature_reading_type(self) -> MirrorMeterReading:
         """Create MirrorMeterReading for Maximum Temperature (°C)."""
         return MirrorMeterReading(
-            mRID=self._generate_mrid(),
+            mRID=self._generate_stable_mrid("max_temperature"),
             description="Battery Max Temperature",
             version=1,
             ReadingType=ReadingType(
@@ -205,7 +240,7 @@ class MirrorUsagePointAdapter:
     def _create_min_temperature_reading_type(self) -> MirrorMeterReading:
         """Create MirrorMeterReading for Minimum Temperature (°C)."""
         return MirrorMeterReading(
-            mRID=self._generate_mrid(),
+            mRID=self._generate_stable_mrid("min_temperature"),
             description="Battery Min Temperature",
             version=1,
             ReadingType=ReadingType(
@@ -222,7 +257,7 @@ class MirrorUsagePointAdapter:
     def _create_avg_temperature_reading_type(self) -> MirrorMeterReading:
         """Create MirrorMeterReading for Average Temperature (°C)."""
         return MirrorMeterReading(
-            mRID=self._generate_mrid(),
+            mRID=self._generate_stable_mrid("avg_temperature"),
             description="Battery Avg Temperature",
             version=1,
             ReadingType=ReadingType(
@@ -236,25 +271,102 @@ class MirrorUsagePointAdapter:
             ),
         )
 
+    def _create_soh_reading_type(self) -> MirrorMeterReading:
+        """Create MirrorMeterReading for SOH (State of Health).
+        
+        SOH is reported as 0.1% units (value / 10 = %).
+        Uses UOM 0 (Not Applicable) as SOH is a dimensionless ratio.
+        """
+        return MirrorMeterReading(
+            mRID=self._generate_stable_mrid("soh"),
+            description="Battery SOH",
+            version=1,
+            ReadingType=ReadingType(
+                accumulationBehaviour=int(AccumulationBehaviourType.INSTANTANEOUS),
+                commodity=int(CommodityType.ELECTRICITY_STORAGE),
+                dataQualifier=int(DataQualifierType.NORMAL),
+                flowDirection=int(FlowDirectionType.NOT_APPLICABLE),
+                kind=int(KindType.NOT_APPLICABLE),
+                powerOfTenMultiplier=-1,  # 0.1% units (value / 10 = %)
+                uom=0,  # UOM 0: Not Applicable (dimensionless)
+            ),
+        )
+
+    def _create_cycle_count_reading_type(self) -> MirrorMeterReading:
+        """Create MirrorMeterReading for Cycle Count.
+        
+        Cycle count is the number of complete charge/discharge cycles.
+        Uses UOM 0 (Not Applicable) as cycle count is dimensionless.
+        """
+        return MirrorMeterReading(
+            mRID=self._generate_stable_mrid("cycle_count"),
+            description="Battery Cycle Count",
+            version=1,
+            ReadingType=ReadingType(
+                accumulationBehaviour=int(AccumulationBehaviourType.CUMULATIVE),
+                commodity=int(CommodityType.ELECTRICITY_STORAGE),
+                dataQualifier=int(DataQualifierType.NORMAL),
+                flowDirection=int(FlowDirectionType.NOT_APPLICABLE),
+                kind=int(KindType.NOT_APPLICABLE),
+                powerOfTenMultiplier=0,  # 1 cycle units
+                uom=0,  # UOM 0: Not Applicable (dimensionless count)
+            ),
+        )
+
+    def _create_timestamp_reading_type(self) -> MirrorMeterReading:
+        """Create MirrorMeterReading for Timestamp.
+        
+        Timestamp is reported as Unix epoch seconds.
+        Uses UOM 0 (Not Applicable) as timestamp is a dimensionless value.
+        """
+        return MirrorMeterReading(
+            mRID=self._generate_stable_mrid("timestamp"),
+            description="BMS Timestamp",
+            version=1,
+            ReadingType=ReadingType(
+                accumulationBehaviour=int(AccumulationBehaviourType.INSTANTANEOUS),
+                commodity=int(CommodityType.NOT_APPLICABLE),
+                dataQualifier=int(DataQualifierType.NORMAL),
+                flowDirection=int(FlowDirectionType.NOT_APPLICABLE),
+                kind=int(KindType.NOT_APPLICABLE),
+                powerOfTenMultiplier=0,  # 1 second units
+                uom=0,  # UOM 0: Not Applicable
+            ),
+        )
+
     def snapshot_to_meter_readings(
         self,
         snapshot: BMSSnapshot,
         reading_mrids: Optional[dict] = None,
+        soh: Optional[float] = None,
+        cycle_count: Optional[int] = None,
+        include_reading_type: bool = False,
     ) -> List[MirrorMeterReading]:
         """
         Convert BMS snapshot to meter readings for upload.
         
         Creates readings for:
-        - Total SOC (from register 4005: SOC_avg, 0.1%)
         - Total Current (from register 4001: total_curr, 0.1A)
         - Total Power (from register 4002: total_power, 0.1kW)
         - Charge Energy (from register 4003: deliy_CHG, 0.1kWh)
         - Discharge Energy (from register 4004: deliy_DSC, 0.1kWh)
+        - Max/Min/Avg Temperature
+        - SOH (State of Health, 0.1% units, UOM=0)
+        - Cycle Count (number of cycles, UOM=0)
+        
+        Per IEEE 2030.5 spec, ReadingType SHALL NOT be modified once registered,
+        and SHOULD NOT be included in subsequent data updates. Only include
+        ReadingType when registering a new mRID that the server has not seen.
         
         Args:
             snapshot: BMS system snapshot
             reading_mrids: Optional dict mapping reading names to mRIDs
                           for updating existing readings
+            soh: Optional SOH value (0-100%), if None calculates from active racks
+            cycle_count: Optional cycle count value, if None uses 0
+            include_reading_type: Whether to include ReadingType in readings.
+                                  Should be False for periodic updates (default),
+                                  True only for initial registration of new mRIDs.
             
         Returns:
             List of MirrorMeterReading objects ready for upload
@@ -270,7 +382,7 @@ class MirrorUsagePointAdapter:
             description="Battery Total Current",
             value=current_value,
             timestamp=ts,
-            reading_type=self._create_current_reading_type().ReadingType,
+            reading_type=self._create_current_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("current") if reading_mrids else None,
         ))
         
@@ -282,7 +394,7 @@ class MirrorUsagePointAdapter:
             description="Battery Total Power",
             value=power_value,
             timestamp=ts,
-            reading_type=self._create_power_reading_type().ReadingType,
+            reading_type=self._create_power_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("power") if reading_mrids else None,
         ))
         
@@ -296,7 +408,7 @@ class MirrorUsagePointAdapter:
             description="Battery Charge Energy",
             value=charge_value,
             timestamp=ts,
-            reading_type=self._create_charge_energy_reading_type().ReadingType,
+            reading_type=self._create_charge_energy_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("charge_energy") if reading_mrids else None,
         ))
         
@@ -309,7 +421,7 @@ class MirrorUsagePointAdapter:
             description="Battery Discharge Energy",
             value=discharge_value,
             timestamp=ts,
-            reading_type=self._create_discharge_energy_reading_type().ReadingType,
+            reading_type=self._create_discharge_energy_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("discharge_energy") if reading_mrids else None,
         ))
         
@@ -322,7 +434,7 @@ class MirrorUsagePointAdapter:
             description="Battery Max Temperature",
             value=max_temp_value,
             timestamp=ts,
-            reading_type=self._create_max_temperature_reading_type().ReadingType,
+            reading_type=self._create_max_temperature_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("max_temperature") if reading_mrids else None,
         ))
         
@@ -335,7 +447,7 @@ class MirrorUsagePointAdapter:
             description="Battery Min Temperature",
             value=min_temp_value,
             timestamp=ts,
-            reading_type=self._create_min_temperature_reading_type().ReadingType,
+            reading_type=self._create_min_temperature_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("min_temperature") if reading_mrids else None,
         ))
         
@@ -348,8 +460,48 @@ class MirrorUsagePointAdapter:
             description="Battery Avg Temperature",
             value=avg_temp_value,
             timestamp=ts,
-            reading_type=self._create_avg_temperature_reading_type().ReadingType,
+            reading_type=self._create_avg_temperature_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("avg_temperature") if reading_mrids else None,
+        ))
+        
+        # SOH Reading (0.1% units, UOM=0)
+        # Calculate from active racks if not provided
+        if soh is None:
+            active_racks = [r for r in snapshot.racks if r.status.value != 0]
+            if active_racks:
+                soh = sum(r.soh for r in active_racks) / len(active_racks)
+            else:
+                soh = 100.0  # Default if no active racks
+        soh_value = int(soh * 10)  # Convert % to 0.1% units
+        readings.append(self._create_meter_reading(
+            name="soh",
+            description="Battery SOH",
+            value=soh_value,
+            timestamp=ts,
+            reading_type=self._create_soh_reading_type().ReadingType if include_reading_type else None,
+            mrid=reading_mrids.get("soh") if reading_mrids else None,
+        ))
+        
+        # Cycle Count Reading (integer count, UOM=0)
+        cycle_value = cycle_count if cycle_count is not None else 0
+        readings.append(self._create_meter_reading(
+            name="cycle_count",
+            description="Battery Cycle Count",
+            value=cycle_value,
+            timestamp=ts,
+            reading_type=self._create_cycle_count_reading_type().ReadingType if include_reading_type else None,
+            mrid=reading_mrids.get("cycle_count") if reading_mrids else None,
+        ))
+        
+        # Timestamp Reading (Unix epoch seconds)
+        # Reports current BMS timestamp for synchronization verification
+        readings.append(self._create_meter_reading(
+            name="timestamp",
+            description="BMS Timestamp",
+            value=ts,  # Unix timestamp in seconds
+            timestamp=ts,
+            reading_type=self._create_timestamp_reading_type().ReadingType if include_reading_type else None,
+            mrid=reading_mrids.get("timestamp") if reading_mrids else None,
         ))
         
         return readings
@@ -360,25 +512,34 @@ class MirrorUsagePointAdapter:
         description: str,
         value: int,
         timestamp: int,
-        reading_type: ReadingType,
+        reading_type: Optional[ReadingType] = None,
         mrid: Optional[str] = None,
     ) -> MirrorMeterReading:
         """
         Create a MirrorMeterReading with a single reading value.
         
+        Per IEEE 2030.5 spec:
+        - ReadingType SHALL NOT be modified once registered.
+        - ReadingType SHOULD NOT be included in subsequent data updates.
+        - ReadingType MUST be included only when posting a new mRID.
+        
         Args:
-            name: Reading name for logging
+            name: Reading name/key (e.g., 'current', 'power')
             description: Human-readable description
             value: The reading value (already scaled)
             timestamp: Unix timestamp
-            reading_type: ReadingType for this reading
-            mrid: Optional existing mRID
+            reading_type: ReadingType for this reading. Should be None for
+                          periodic updates (omit after registration).
+            mrid: Optional existing mRID (from cache or server)
             
         Returns:
             MirrorMeterReading ready for upload
         """
+        # Use provided mRID, or generate stable mRID based on name
+        final_mrid = mrid or self._generate_stable_mrid(name)
+        
         return MirrorMeterReading(
-            mRID=mrid or self._generate_mrid(),
+            mRID=final_mrid,
             description=description,
             version=1,
             lastUpdateTime=timestamp,

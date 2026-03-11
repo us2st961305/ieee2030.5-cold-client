@@ -271,15 +271,47 @@ class SafePowerController:
             print("Power setpoint was simulated, not actually sent to PCS")
     """
     
-    def __init__(self, config: Optional[PowerControlConfig] = None):
+    def __init__(
+        self,
+        config: Optional[PowerControlConfig] = None,
+        pcs_writer=None,
+    ):
+        """
+        初始化安全功率控制器
+        
+        Args:
+            config: 功率控制配置
+            pcs_writer: ModbusPowerWriter 實例（生產/DRY_RUN 模式使用）
+        """
         self.config = config or PowerControlConfig()
         self.validator = PowerValidator(self.config.limits)
         self._current_power_w: int = 0
         self._current_soc: Optional[float] = None
+        self._pcs_writer = pcs_writer  # ModbusPowerWriter (可選)
+        self._control_mode = self._resolve_control_mode()
         
-        # 安全檢查：非模擬模式需要額外驗證
-        if not self.config.simulation_mode:
+        # 安全檢查：生產模式需要額外驗證
+        if self._control_mode == ControlMode.PRODUCTION:
             self._verify_production_authorization()
+        elif self._control_mode == ControlMode.DRY_RUN:
+            logger.warning("SafePowerController initialized in DRY_RUN mode")
+        else:
+            logger.info("SafePowerController initialized in SIMULATION mode")
+    
+    def _resolve_control_mode(self) -> ControlMode:
+        """根據配置解析控制模式"""
+        # 支援 runtime_config 的 mode 字串
+        mode_str = getattr(self.config, '_runtime_mode', None)
+        if mode_str == "dry_run":
+            return ControlMode.DRY_RUN
+        elif mode_str == "production":
+            return ControlMode.PRODUCTION
+        elif mode_str == "simulation":
+            return ControlMode.SIMULATION
+        # 向後相容: 使用舊的 simulation_mode 布林值
+        if self.config.simulation_mode:
+            return ControlMode.SIMULATION
+        return ControlMode.PRODUCTION
     
     def _verify_production_authorization(self) -> None:
         """驗證生產模式授權"""
@@ -298,18 +330,19 @@ class SafePowerController:
         
         logger.warning("SafePowerController initialized in PRODUCTION mode")
     
+    def set_pcs_writer(self, writer) -> None:
+        """注入 PCS writer (延遲注入用)"""
+        self._pcs_writer = writer
+    
     @property
     def simulation_mode(self) -> bool:
         """是否為模擬模式"""
-        return self.config.simulation_mode
+        return self._control_mode == ControlMode.SIMULATION
     
     @property
     def control_mode(self) -> ControlMode:
         """當前控制模式"""
-        return (
-            ControlMode.SIMULATION if self.config.simulation_mode
-            else ControlMode.PRODUCTION
-        )
+        return self._control_mode
     
     def update_current_state(
         self,
@@ -385,23 +418,86 @@ class SafePowerController:
                 message=f"Simulated power setpoint: {power_w}W"
             )
         
-        # 4. 生產模式處理（需要實際實現 PCS 控制邏輯）
-        # 注意：此處應該調用實際的 PCS 控制介面
-        # 但為了安全，我們在這裡只返回佔位結果
-        self._log_request(request_id, power_w, source, "pending", [])
+        # 4. DRY_RUN 模式：完整驗證 + 計算暫存器值，但不實際寫入
+        if self._control_mode == ControlMode.DRY_RUN:
+            self._log_request(request_id, power_w, source, "dry_run", [])
+            dry_run_msg = f"[DRY_RUN] Would set power to {power_w}W"
+            if self._pcs_writer:
+                register_value = self._pcs_writer._power_to_register_value(power_w)
+                dry_run_msg += (
+                    f" (register {self._pcs_writer.config.power_setpoint_address}, "
+                    f"raw_value={register_value})"
+                )
+            logger.info(dry_run_msg)
+            return PowerControlResult(
+                request_id=request_id,
+                mode=ControlMode.DRY_RUN,
+                requested_power_w=power_w,
+                executed=False,
+                simulated=False,
+                timestamp=timestamp,
+                message=dry_run_msg
+            )
         
-        # TODO: 實現實際的 PCS 控制邏輯
-        # result = await self._send_to_pcs(power_w)
-        
-        return PowerControlResult(
-            request_id=request_id,
-            mode=ControlMode.PRODUCTION,
-            requested_power_w=power_w,
-            executed=False,  # 改為 True 當實際實現時
-            simulated=False,
-            timestamp=timestamp,
-            message="Production mode: PCS control not yet implemented"
-        )
+        # 5. 生產模式：透過 ModbusPowerWriter 實際寫入 PCS
+        if self._pcs_writer:
+            self._log_request(request_id, power_w, source, "executing", [])
+            try:
+                write_result = await self._pcs_writer.set_power(
+                    power_w=power_w, source=source
+                )
+                executed = write_result.success
+                msg = (
+                    f"[PRODUCTION] Power setpoint {power_w}W "
+                    f"{'written successfully' if executed else 'WRITE FAILED'}"
+                )
+                if write_result.error_message:
+                    msg += f" - {write_result.error_message}"
+                
+                self._log_request(
+                    request_id, power_w, source,
+                    "executed" if executed else "write_failed",
+                    [write_result.error_message] if write_result.error_message else []
+                )
+                
+                return PowerControlResult(
+                    request_id=request_id,
+                    mode=ControlMode.PRODUCTION,
+                    requested_power_w=power_w,
+                    executed=executed,
+                    simulated=False,
+                    timestamp=timestamp,
+                    errors=[write_result.error_message] if (write_result.error_message and not executed) else [],
+                    message=msg
+                )
+            except Exception as e:
+                logger.exception(f"PCS write error: {e}")
+                self._log_request(request_id, power_w, source, "error", [str(e)])
+                return PowerControlResult(
+                    request_id=request_id,
+                    mode=ControlMode.PRODUCTION,
+                    requested_power_w=power_w,
+                    executed=False,
+                    simulated=False,
+                    timestamp=timestamp,
+                    errors=[str(e)],
+                    message=f"PCS write error: {e}"
+                )
+        else:
+            # 生產模式但沒有 writer — 記錄警告
+            self._log_request(request_id, power_w, source, "no_writer", [])
+            logger.warning(
+                f"[PRODUCTION] No PCS writer configured, power setpoint {power_w}W not sent"
+            )
+            return PowerControlResult(
+                request_id=request_id,
+                mode=ControlMode.PRODUCTION,
+                requested_power_w=power_w,
+                executed=False,
+                simulated=False,
+                timestamp=timestamp,
+                message="Production mode: No PCS writer configured"
+            )
     
     def _log_request(
         self,
@@ -462,6 +558,59 @@ def check_safety_environment() -> bool:
     return True
 
 
+def create_power_controller_from_runtime(runtime_power_config) -> SafePowerController:
+    """
+    從 RuntimeConfig.power_control 創建 SafePowerController
+    
+    Args:
+        runtime_power_config: PowerControlConfig from runtime_config module
+        
+    Returns:
+        SafePowerController instance
+    """
+    from bms_2030_5_client.runtime_config import PowerControlMode as RTPowerControlMode
+    
+    mode = runtime_power_config.mode
+    limits = runtime_power_config.limits
+    
+    # 構建 PowerLimits
+    power_limits = PowerLimits(
+        max_charge_w=limits.max_charge_w,
+        max_discharge_w=limits.max_discharge_w,
+        max_ramp_rate_w_per_s=limits.ramp_rate_w_per_s,
+        min_soc_percent=limits.min_soc_percent,
+        max_soc_percent=limits.max_soc_percent,
+    )
+    
+    # 決定 simulation_mode (向後相容)
+    is_simulation = (mode == RTPowerControlMode.SIMULATION.value)
+    
+    # 如果是 production 模式，設定環境變數以通過授權檢查
+    if mode == RTPowerControlMode.PRODUCTION.value:
+        auth = runtime_power_config.production_auth
+        if auth.safety_token:
+            os.environ.setdefault("POWER_CONTROL_SAFETY_TOKEN", auth.safety_token)
+        if auth.confirm_production:
+            os.environ.setdefault("POWER_CONTROL_CONFIRM_PRODUCTION", "I_UNDERSTAND_THE_RISKS")
+    
+    # 構建 PowerControlConfig
+    config = PowerControlConfig(
+        simulation_mode=is_simulation,
+        limits=power_limits,
+    )
+    # 附加 runtime mode 字串供 _resolve_control_mode 使用
+    config._runtime_mode = mode
+    
+    controller = SafePowerController(config=config)
+    
+    logger.info(
+        f"Power controller created from runtime config: mode={mode}, "
+        f"limits=[charge={limits.max_charge_w}W, discharge={limits.max_discharge_w}W]"
+    )
+    
+    return controller
+
+
 # 導出的公開介面
 __all__ = [
     "ControlMode",
@@ -477,4 +626,5 @@ __all__ = [
     "EmergencyStop",
     "SafePowerController",
     "check_safety_environment",
+    "create_power_controller_from_runtime",
 ]

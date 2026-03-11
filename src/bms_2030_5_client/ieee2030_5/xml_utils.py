@@ -4,6 +4,7 @@ XML serialization utilities for IEEE 2030.5.
 
 import logging
 import xml.etree.ElementTree as ET
+from defusedxml.ElementTree import fromstring as _safe_fromstring
 from enum import Enum
 from typing import Any, Type, TypeVar, get_type_hints, get_origin, get_args
 from dataclasses import fields, is_dataclass
@@ -157,7 +158,7 @@ def xml_to_dataclass(xml_str: str, cls: Type[T]) -> T:
     logger.debug(f"XML content:\n{xml_str}")
     
     try:
-        root = ET.fromstring(xml_str)
+        root = _safe_fromstring(xml_str)
         result = _parse_element_to_dataclass(root, cls)
         
         logger.debug(f"Parse result: {result}")

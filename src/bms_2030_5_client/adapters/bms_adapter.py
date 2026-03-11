@@ -304,18 +304,31 @@ class BMSAdapter:
         self,
         snapshot: BMSSnapshot,
         reading_mrids: Optional[dict] = None,
+        soh: Optional[float] = None,
+        cycle_count: Optional[int] = None,
+        include_reading_type: bool = False,
     ) -> List[MirrorMeterReading]:
         """
         Convert BMS snapshot to meter readings for upload.
         
         Delegates to MirrorUsagePointAdapter.
         
+        Per IEEE 2030.5 spec, ReadingType SHOULD NOT be included in
+        subsequent data updates after initial registration.
+        
         Args:
             snapshot: BMS system snapshot
             reading_mrids: Optional dict mapping reading names to mRIDs
                           for updating existing readings
+            soh: Optional SOH value (0-100%), if None calculates from active racks
+            cycle_count: Optional cycle count value, if None uses 0
+            include_reading_type: Whether to include ReadingType in readings.
+                                  Should be False for periodic updates (default).
             
         Returns:
             List of MirrorMeterReading objects ready for upload
         """
-        return self._mup_adapter.snapshot_to_meter_readings(snapshot, reading_mrids)
+        return self._mup_adapter.snapshot_to_meter_readings(
+            snapshot, reading_mrids, soh=soh, cycle_count=cycle_count,
+            include_reading_type=include_reading_type,
+        )
