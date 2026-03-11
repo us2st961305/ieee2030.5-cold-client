@@ -381,7 +381,7 @@ class URIPaths:
     
     # Subscription
     SUBSCRIPTION_LIST: Final[str] = "/sub"
-    NOTIFICATION_LIST: Final[str] = "/ntfy"
+    NOTIFICATION_LIST: Final[str] = "/notify"
     
     @staticmethod
     def for_end_device(edev_id: str, sub_path: str = "") -> str:
@@ -611,30 +611,30 @@ class LogEventCode(IntEnum):
     DER_FAULT_PHASE_ROTATION_RTN = 0x15     # 相序旋轉錯誤已清除
 
 
-# LogEvent code descriptions for logging
+# LogEvent code descriptions for logging (max 32 chars per IEEE 2030.5)
 LOG_EVENT_CODE_DESCRIPTIONS: Dict[int, str] = {
-    LogEventCode.DER_FAULT_OVER_CURRENT: "Over current fault detected (過電流故障)",
-    LogEventCode.DER_FAULT_OVER_CURRENT_RTN: "Over current fault cleared (過電流故障已清除)",
-    LogEventCode.DER_FAULT_OVER_VOLTAGE: "Over voltage fault detected (過電壓故障)",
-    LogEventCode.DER_FAULT_OVER_VOLTAGE_RTN: "Over voltage fault cleared (過電壓故障已清除)",
-    LogEventCode.DER_FAULT_UNDER_VOLTAGE: "Under voltage fault detected (低電壓故障)",
-    LogEventCode.DER_FAULT_UNDER_VOLTAGE_RTN: "Under voltage fault cleared (低電壓故障已清除)",
-    LogEventCode.DER_FAULT_OVER_FREQUENCY: "Over frequency fault detected (過頻率故障)",
-    LogEventCode.DER_FAULT_OVER_FREQUENCY_RTN: "Over frequency fault cleared (過頻率故障已清除)",
-    LogEventCode.DER_FAULT_UNDER_FREQUENCY: "Under frequency fault detected (低頻率故障)",
-    LogEventCode.DER_FAULT_UNDER_FREQUENCY_RTN: "Under frequency fault cleared (低頻率故障已清除)",
-    LogEventCode.DER_FAULT_VOLTAGE_IMBALANCE: "Voltage imbalance fault detected (電壓不平衡故障)",
-    LogEventCode.DER_FAULT_VOLTAGE_IMBALANCE_RTN: "Voltage imbalance fault cleared (電壓不平衡故障已清除)",
-    LogEventCode.DER_FAULT_CURRENT_IMBALANCE: "Current imbalance fault detected (電流不平衡故障)",
-    LogEventCode.DER_FAULT_CURRENT_IMBALANCE_RTN: "Current imbalance fault cleared (電流不平衡故障已清除)",
-    LogEventCode.DER_FAULT_EMERGENCY_LOCAL: "Local emergency fault detected (本地緊急狀況故障)",
-    LogEventCode.DER_FAULT_EMERGENCY_LOCAL_RTN: "Local emergency fault cleared (本地緊急狀況已清除)",
-    LogEventCode.DER_FAULT_EMERGENCY_REMOTE: "Remote emergency fault detected (遠端緊急狀況故障)",
-    LogEventCode.DER_FAULT_EMERGENCY_REMOTE_RTN: "Remote emergency fault cleared (遠端緊急狀況已清除)",
-    LogEventCode.DER_FAULT_LOW_POWER_INPUT: "Low power input fault detected (低功率輸入故障)",
-    LogEventCode.DER_FAULT_LOW_POWER_INPUT_RTN: "Low power input fault cleared (低功率輸入故障已清除)",
-    LogEventCode.DER_FAULT_PHASE_ROTATION: "Phase rotation fault detected (相序旋轉錯誤故障)",
-    LogEventCode.DER_FAULT_PHASE_ROTATION_RTN: "Phase rotation fault cleared (相序旋轉錯誤已清除)",
+    LogEventCode.DER_FAULT_OVER_CURRENT: "OverCurrent Fault",
+    LogEventCode.DER_FAULT_OVER_CURRENT_RTN: "OverCurrent Cleared",
+    LogEventCode.DER_FAULT_OVER_VOLTAGE: "OverVoltage Fault",
+    LogEventCode.DER_FAULT_OVER_VOLTAGE_RTN: "OverVoltage Cleared",
+    LogEventCode.DER_FAULT_UNDER_VOLTAGE: "UnderVoltage Fault",
+    LogEventCode.DER_FAULT_UNDER_VOLTAGE_RTN: "UnderVoltage Cleared",
+    LogEventCode.DER_FAULT_OVER_FREQUENCY: "OverFrequency Fault",
+    LogEventCode.DER_FAULT_OVER_FREQUENCY_RTN: "OverFrequency Cleared",
+    LogEventCode.DER_FAULT_UNDER_FREQUENCY: "UnderFrequency Fault",
+    LogEventCode.DER_FAULT_UNDER_FREQUENCY_RTN: "UnderFrequency Cleared",
+    LogEventCode.DER_FAULT_VOLTAGE_IMBALANCE: "VoltageImbalance Fault",
+    LogEventCode.DER_FAULT_VOLTAGE_IMBALANCE_RTN: "VoltageImbalance Cleared",
+    LogEventCode.DER_FAULT_CURRENT_IMBALANCE: "CurrentImbalance Fault",
+    LogEventCode.DER_FAULT_CURRENT_IMBALANCE_RTN: "CurrentImbalance Cleared",
+    LogEventCode.DER_FAULT_EMERGENCY_LOCAL: "LocalEmergency Fault",
+    LogEventCode.DER_FAULT_EMERGENCY_LOCAL_RTN: "LocalEmergency Cleared",
+    LogEventCode.DER_FAULT_EMERGENCY_REMOTE: "RemoteEmergency Fault",
+    LogEventCode.DER_FAULT_EMERGENCY_REMOTE_RTN: "RemoteEmergency Cleared",
+    LogEventCode.DER_FAULT_LOW_POWER_INPUT: "LowPowerInput Fault",
+    LogEventCode.DER_FAULT_LOW_POWER_INPUT_RTN: "LowPowerInput Cleared",
+    LogEventCode.DER_FAULT_PHASE_ROTATION: "PhaseRotation Fault",
+    LogEventCode.DER_FAULT_PHASE_ROTATION_RTN: "PhaseRotation Cleared",
 }
 
 

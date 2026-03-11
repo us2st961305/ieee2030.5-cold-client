@@ -165,6 +165,8 @@ class DERCapability:
     rtgMinPFUnderExcited: Optional[int] = None
     rtgVNom: Optional[Voltage] = None  # Nominal voltage
     rtgAMax: Optional[Current] = None  # Maximum current
+    rtgAbnormalCategory: Optional[int] = None  # IEEE 1547 abnormal category: 0=N/A, 1=Cat I, 2=Cat II, 3=Cat III
+    rtgMaxWh: Optional[ActivePower] = None  # Maximum energy storage capacity (Wh)
     type_: DERType = DERType.BATTERY_STORAGE
 
 
@@ -177,11 +179,12 @@ class DERSettings:
     Current operational settings of the DER.
     """
     href: Optional[str] = None
-    setGradW: Optional[int] = None  # Ramp rate for active power
+    setGradW: Optional[int] = None  # Default ramp rate: % setMaxW/s, resolution 0.01 %/s (UInt16)
     setMaxW: Optional[ActivePower] = None  # Maximum active power
     setMaxVar: Optional[ReactivePower] = None
     setMaxChargeRateW: Optional[ActivePower] = None
     setMaxDischargeRateW: Optional[ActivePower] = None
+    modesEnabled: Optional[int] = None  # DERControlType bitmask (HexBinary32) - enabled subset of modesSupported
     setMinPFOverExcited: Optional[int] = None
     setMinPFUnderExcited: Optional[int] = None
     setVRef: Optional[Voltage] = None
@@ -646,9 +649,9 @@ class MirrorMeterReadingList:
     MirrorMeterReading: List[MirrorMeterReading] = field(default_factory=list)
 
 
-# Default IANA PEN - replace with your organization's registered PEN
+# IANA Private Enterprise Number (PEN) for this organization
 # See https://www.iana.org/assignments/enterprise-numbers/
-DEFAULT_IANA_PEN = 0x00000000  # Placeholder - should be replaced with actual PEN
+DEFAULT_IANA_PEN = 0x2C155C03
 
 # Reserved prefix for objects being created (accumulating)
 MRID_RESERVED_PREFIX = "FFFFFFFFFFFFFFFFFFFFFFFF"  # 96 bits all 1s
@@ -926,6 +929,10 @@ class DERControl:
     # Priority (lower = higher priority)
     primacy: int = 0
     
+    # Response configuration (IEEE 2030.5-2023)
+    replyTo: Optional[str] = None                     # URI to POST response to
+    responseRequired: Optional[int] = None            # Bitmask: see ResponseRequired flags
+    
     def is_active(self, current_time: Optional[int] = None) -> bool:
         """Check if this control is currently active."""
         if self.interval is None:
@@ -959,6 +966,12 @@ class DERProgram:
     DER Program containing DER controls.
     
     Reference: IEEE Std 2030.5-2023, DERProgram resource
+    
+    Note: 
+    - Link fields may be parsed as Link objects by XML parser.
+      Use get_*_href() methods to safely get the href strings.
+    - ActiveDERControlListLink is DEPRECATED in IEEE 2030.5-2023.
+      Use DERControlListLink (/derp/{id}/derc) instead.
     """
     href: Optional[str] = None
     mRID: Optional[str] = None
@@ -966,11 +979,42 @@ class DERProgram:
     version: int = 0
     primacy: int = 0                                  # Program priority
     
-    # Links to control lists
-    ActiveDERControlListLink: Optional[str] = None
-    DefaultDERControlLink: Optional[str] = None
-    DERControlListLink: Optional[str] = None
-    DERCurveListLink: Optional[str] = None
+    # Links to control lists (may be Link objects or strings)
+    # DEPRECATED: ActiveDERControlListLink - use DERControlListLink instead
+    ActiveDERControlListLink: Optional["Link"] = None
+    DefaultDERControlLink: Optional["Link"] = None
+    DERControlListLink: Optional["Link"] = None       # Preferred: /derp/{id}/derc
+    DERCurveListLink: Optional["Link"] = None
+    
+    def _get_link_href(self, link: Optional["Link"]) -> Optional[str]:
+        """Safely get href from a Link field."""
+        if link is None:
+            return None
+        if isinstance(link, str):
+            return link
+        if hasattr(link, 'href'):
+            return link.href
+        return None
+    
+    def get_active_der_control_list_href(self) -> Optional[str]:
+        """
+        Safely get ActiveDERControlListLink href.
+        
+        DEPRECATED: Use get_der_control_list_href() instead per IEEE 2030.5-2023.
+        """
+        return self._get_link_href(self.ActiveDERControlListLink)
+    
+    def get_default_der_control_href(self) -> Optional[str]:
+        """Safely get DefaultDERControlLink href."""
+        return self._get_link_href(self.DefaultDERControlLink)
+    
+    def get_der_control_list_href(self) -> Optional[str]:
+        """Safely get DERControlListLink href. This is the preferred method."""
+        return self._get_link_href(self.DERControlListLink)
+    
+    def get_der_curve_list_href(self) -> Optional[str]:
+        """Safely get DERCurveListLink href."""
+        return self._get_link_href(self.DERCurveListLink)
 
 
 @dataclass_json
@@ -1001,25 +1045,38 @@ class FunctionSetAssignments:
     FSA defines which function sets (programs, time resources, etc.) 
     are assigned to an EndDevice. The client must poll/subscribe to 
     detect changes.
+    
+    Note: Link fields may be parsed as Link objects by XML parser.
+    Use get_der_program_list_href() to safely get the href string.
     """
     href: Optional[str] = None
     mRID: Optional[str] = None
     description: Optional[str] = None
     version: int = 0
     
-    # Links to function sets
-    DERProgramListLink: Optional[str] = None
-    ResponseSetListLink: Optional[str] = None
-    TimeLink: Optional[str] = None
+    # Links to function sets (may be Link objects or strings depending on parser)
+    DERProgramListLink: Optional["Link"] = None
+    ResponseSetListLink: Optional["Link"] = None
+    TimeLink: Optional["Link"] = None
     
     # Other function set links (as needed)
-    CustomerAccountListLink: Optional[str] = None
-    DemandResponseProgramListLink: Optional[str] = None
-    FileListLink: Optional[str] = None
-    MessagingProgramListLink: Optional[str] = None
-    PrepaymentListLink: Optional[str] = None
-    TariffProfileListLink: Optional[str] = None
-    UsagePointListLink: Optional[str] = None
+    CustomerAccountListLink: Optional["Link"] = None
+    DemandResponseProgramListLink: Optional["Link"] = None
+    FileListLink: Optional["Link"] = None
+    MessagingProgramListLink: Optional["Link"] = None
+    PrepaymentListLink: Optional["Link"] = None
+    TariffProfileListLink: Optional["Link"] = None
+    UsagePointListLink: Optional["Link"] = None
+    
+    def get_der_program_list_href(self) -> Optional[str]:
+        """Safely get DERProgramListLink href string."""
+        if self.DERProgramListLink is None:
+            return None
+        if isinstance(self.DERProgramListLink, str):
+            return self.DERProgramListLink
+        if hasattr(self.DERProgramListLink, 'href'):
+            return self.DERProgramListLink.href
+        return None
 
 
 @dataclass_json
