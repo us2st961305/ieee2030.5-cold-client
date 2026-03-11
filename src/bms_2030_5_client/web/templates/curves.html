@@ -1,0 +1,651 @@
+{% extends "base.html" %}
+
+{% block title %}DER Curves - BMS 2030.5{% endblock %}
+
+{% block content %}
+<h1>📈 DER Curves</h1>
+<p style="color: var(--text-secondary); margin-bottom: 2rem;">
+    IEEE 2030.5-2023 DER 曲線管理 - Volt-VAR, Freq-Watt, LVRT/HVRT
+</p>
+
+<!-- Curve Type Selector -->
+<div class="card">
+    <div class="card-header">
+        <h3>📊 曲線類型</h3>
+        <div class="btn-group">
+            <button class="btn btn-secondary" onclick="refreshCurves()">🔄 重新整理</button>
+        </div>
+    </div>
+    
+    <div class="curve-types-grid">
+        <div class="curve-type-card" data-type="0" onclick="selectCurveType(0)">
+            <div class="curve-type-icon">📉</div>
+            <div class="curve-type-name">opModVoltVar</div>
+            <div class="curve-type-desc">電壓-無功功率曲線</div>
+        </div>
+        <div class="curve-type-card" data-type="1" onclick="selectCurveType(1)">
+            <div class="curve-type-icon">📊</div>
+            <div class="curve-type-name">opModFreqWatt</div>
+            <div class="curve-type-desc">頻率-有功功率曲線</div>
+        </div>
+        <div class="curve-type-card" data-type="4" onclick="selectCurveType(4)">
+            <div class="curve-type-icon">⚡</div>
+            <div class="curve-type-name">opModLVRTMomentaryCessation</div>
+            <div class="curve-type-desc">低電壓穿越曲線 (LVRT)</div>
+        </div>
+        <div class="curve-type-card" data-type="6" onclick="selectCurveType(6)">
+            <div class="curve-type-icon">🔺</div>
+            <div class="curve-type-name">opModHVRTMomentaryCessation</div>
+            <div class="curve-type-desc">高電壓穿越曲線 (HVRT)</div>
+        </div>
+        <div class="curve-type-card" data-type="9" onclick="selectCurveType(9)">
+            <div class="curve-type-icon">📐</div>
+            <div class="curve-type-name">opModVoltWatt</div>
+            <div class="curve-type-desc">電壓-有功功率曲線</div>
+        </div>
+        <div class="curve-type-card" data-type="12" onclick="selectCurveType(12)">
+            <div class="curve-type-icon">🔋</div>
+            <div class="curve-type-name">opModWattPF</div>
+            <div class="curve-type-desc">有功-功率因數曲線</div>
+        </div>
+    </div>
+</div>
+
+<!-- IEEE 1547-2018 Default Curves -->
+<div class="card">
+    <div class="card-header">
+        <h3>📋 IEEE 1547-2018 預設曲線</h3>
+    </div>
+    
+    <div class="default-curves-grid">
+        <div class="default-curve-item">
+            <h4>Volt-VAR Default</h4>
+            <p>標準電壓-無功控制曲線</p>
+            <div class="curve-preview" id="default-volt-var"></div>
+            <button class="btn btn-primary btn-sm" onclick="loadDefaultCurve('volt_var')">載入</button>
+        </div>
+        
+        <div class="default-curve-item">
+            <h4>Category I LVRT</h4>
+            <p>IEEE 1547 Category I 低電壓穿越</p>
+            <div class="curve-preview" id="default-cat1-lvrt"></div>
+            <button class="btn btn-primary btn-sm" onclick="loadDefaultCurve('cat1_lvrt')">載入</button>
+        </div>
+        
+        <div class="default-curve-item">
+            <h4>Category II LVRT</h4>
+            <p>IEEE 1547 Category II 低電壓穿越</p>
+            <div class="curve-preview" id="default-cat2-lvrt"></div>
+            <button class="btn btn-primary btn-sm" onclick="loadDefaultCurve('cat2_lvrt')">載入</button>
+        </div>
+        
+        <div class="default-curve-item">
+            <h4>Category III LVRT</h4>
+            <p>IEEE 1547 Category III 低電壓穿越</p>
+            <div class="curve-preview" id="default-cat3-lvrt"></div>
+            <button class="btn btn-primary btn-sm" onclick="loadDefaultCurve('cat3_lvrt')">載入</button>
+        </div>
+    </div>
+</div>
+
+<!-- Current Curve Display -->
+<div class="card">
+    <div class="card-header">
+        <h3>🎯 當前曲線</h3>
+        <span id="current-curve-type" class="status-badge status-info">未選擇</span>
+    </div>
+    
+    <!-- Curve Visualization -->
+    <div class="curve-container">
+        <canvas id="curve-canvas" width="800" height="400"></canvas>
+    </div>
+    
+    <!-- Curve Data Points -->
+    <div class="curve-data-section">
+        <h4>📊 曲線資料點</h4>
+        <table class="data-table" id="curve-data-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>X 值 (獨立變數)</th>
+                    <th>Y 值 (應變數)</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody id="curve-data-body">
+                <tr>
+                    <td colspan="4" style="text-align: center; color: var(--text-secondary);">
+                        選擇曲線類型或載入預設曲線
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <div class="btn-group" style="margin-top: 1rem;">
+            <button class="btn btn-success" onclick="addDataPoint()">➕ 新增點</button>
+            <button class="btn btn-primary" onclick="saveCurve()">💾 儲存曲線</button>
+            <button class="btn btn-warning" onclick="testInterpolation()">🧮 測試插值</button>
+        </div>
+    </div>
+</div>
+
+<!-- Curve Parameters -->
+<div class="card">
+    <div class="card-header">
+        <h3>⚙️ 曲線參數</h3>
+    </div>
+    
+    <div class="form-grid">
+        <div class="form-group">
+            <label>曲線 mRID</label>
+            <input type="text" id="curve-mrid" placeholder="自動生成" readonly>
+        </div>
+        <div class="form-group">
+            <label>描述</label>
+            <input type="text" id="curve-description" placeholder="曲線描述">
+        </div>
+        <div class="form-group">
+            <label>建立時間 (creationTime)</label>
+            <input type="text" id="curve-creation-time" readonly>
+        </div>
+        <div class="form-group">
+            <label>自主 (autonomous)</label>
+            <select id="curve-autonomous">
+                <option value="true">是</option>
+                <option value="false">否</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Open Loop 響應時間 (秒)</label>
+            <input type="number" id="curve-open-loop-tms" value="0" min="0">
+        </div>
+        <div class="form-group">
+            <label>X 軸乘數</label>
+            <select id="curve-x-multiplier">
+                <option value="-3">milli (10⁻³)</option>
+                <option value="0" selected>無 (10⁰)</option>
+                <option value="3">kilo (10³)</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Y 軸乘數</label>
+            <select id="curve-y-multiplier">
+                <option value="-3">milli (10⁻³)</option>
+                <option value="0" selected>無 (10⁰)</option>
+                <option value="3">kilo (10³)</option>
+            </select>
+        </div>
+    </div>
+</div>
+
+<style>
+.curve-types-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+}
+
+.curve-type-card {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 1rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    border: 2px solid transparent;
+}
+
+.curve-type-card:hover {
+    border-color: var(--accent);
+}
+
+.curve-type-card.selected {
+    border-color: var(--success);
+    background: rgba(74, 222, 128, 0.1);
+}
+
+.curve-type-icon {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+}
+
+.curve-type-name {
+    font-weight: bold;
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    margin-bottom: 0.25rem;
+}
+
+.curve-type-desc {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.default-curves-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+}
+
+.default-curve-item {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 1rem;
+    text-align: center;
+}
+
+.default-curve-item h4 {
+    margin-bottom: 0.5rem;
+    color: var(--accent);
+}
+
+.default-curve-item p {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+}
+
+.curve-preview {
+    height: 60px;
+    background: var(--bg-card);
+    border-radius: 4px;
+    margin-bottom: 0.5rem;
+}
+
+.curve-container {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
+#curve-canvas {
+    width: 100%;
+    height: auto;
+    border-radius: 4px;
+}
+
+.curve-data-section h4 {
+    margin-bottom: 1rem;
+    color: var(--text-secondary);
+}
+
+.form-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.form-group label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.form-group input,
+.form-group select {
+    padding: 0.5rem;
+    border: 1px solid var(--bg-secondary);
+    border-radius: 4px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 0.9rem;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.data-table th,
+.data-table td {
+    padding: 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--bg-secondary);
+}
+
+.data-table th {
+    background: var(--bg-secondary);
+    font-weight: 600;
+}
+
+.data-table tbody tr:hover {
+    background: rgba(233, 69, 96, 0.1);
+}
+
+.status-info {
+    background: var(--info);
+    color: white;
+}
+
+@media (max-width: 900px) {
+    .curve-types-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .default-curves-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .form-grid {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Current curve state
+let currentCurve = {
+    curveType: null,
+    curveData: []
+};
+
+// Curve type names
+const curveTypeNames = {
+    0: 'opModVoltVar',
+    1: 'opModFreqWatt',
+    2: 'opModHFRTMayTrip',
+    3: 'opModHFRTMustTrip',
+    4: 'opModLVRTMomentaryCessation',
+    5: 'opModLVRTMustTrip',
+    6: 'opModHVRTMomentaryCessation',
+    7: 'opModHVRTMustTrip',
+    8: 'opModLFRTMayTrip',
+    9: 'opModVoltWatt',
+    10: 'opModLFRTMustTrip',
+    11: 'opModFreqDroop',
+    12: 'opModWattPF',
+    13: 'opModWattVar',
+    14: 'opModVoltVarArray'
+};
+
+function selectCurveType(type) {
+    // Update UI
+    document.querySelectorAll('.curve-type-card').forEach(card => {
+        card.classList.remove('selected');
+    });
+    document.querySelector(`.curve-type-card[data-type="${type}"]`)?.classList.add('selected');
+    
+    // Update state
+    currentCurve.curveType = type;
+    currentCurve.curveData = [];
+    
+    // Update display
+    document.getElementById('current-curve-type').textContent = curveTypeNames[type] || `Type ${type}`;
+    
+    // Clear table
+    updateDataTable();
+    drawCurve();
+}
+
+function loadDefaultCurve(curveId) {
+    // Example default curves
+    const defaults = {
+        'volt_var': {
+            type: 0,
+            data: [
+                { x: 92, y: 44 },
+                { x: 98, y: 0 },
+                { x: 102, y: 0 },
+                { x: 108, y: -44 }
+            ]
+        },
+        'cat1_lvrt': {
+            type: 4,
+            data: [
+                { x: 50, y: 0 },
+                { x: 50, y: 160 },
+                { x: 70, y: 160 },
+                { x: 88, y: 21000 }
+            ]
+        },
+        'cat2_lvrt': {
+            type: 4,
+            data: [
+                { x: 0, y: 0 },
+                { x: 0, y: 160 },
+                { x: 50, y: 160 },
+                { x: 70, y: 3000 },
+                { x: 88, y: 21000 }
+            ]
+        },
+        'cat3_lvrt': {
+            type: 4,
+            data: [
+                { x: 0, y: 0 },
+                { x: 0, y: 1000 },
+                { x: 50, y: 1000 },
+                { x: 70, y: 10000 },
+                { x: 88, y: 21000 }
+            ]
+        }
+    };
+    
+    const curve = defaults[curveId];
+    if (curve) {
+        selectCurveType(curve.type);
+        currentCurve.curveData = curve.data;
+        updateDataTable();
+        drawCurve();
+        showToast(`已載入 ${curveId} 預設曲線`, 'success');
+    }
+}
+
+function updateDataTable() {
+    const tbody = document.getElementById('curve-data-body');
+    
+    if (currentCurve.curveData.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="4" style="text-align: center; color: var(--text-secondary);">
+                    無資料點 - 點擊「新增點」開始
+                </td>
+            </tr>
+        `;
+        return;
+    }
+    
+    tbody.innerHTML = currentCurve.curveData.map((point, i) => `
+        <tr>
+            <td>${i + 1}</td>
+            <td>
+                <input type="number" value="${point.x}" 
+                       onchange="updatePoint(${i}, 'x', this.value)"
+                       style="width: 100px; padding: 0.25rem;">
+            </td>
+            <td>
+                <input type="number" value="${point.y}"
+                       onchange="updatePoint(${i}, 'y', this.value)"
+                       style="width: 100px; padding: 0.25rem;">
+            </td>
+            <td>
+                <button class="btn btn-danger btn-sm" onclick="removePoint(${i})">🗑️</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function addDataPoint() {
+    const lastPoint = currentCurve.curveData[currentCurve.curveData.length - 1];
+    currentCurve.curveData.push({
+        x: lastPoint ? lastPoint.x + 10 : 0,
+        y: lastPoint ? lastPoint.y : 0
+    });
+    updateDataTable();
+    drawCurve();
+}
+
+function updatePoint(index, axis, value) {
+    currentCurve.curveData[index][axis] = parseFloat(value);
+    drawCurve();
+}
+
+function removePoint(index) {
+    currentCurve.curveData.splice(index, 1);
+    updateDataTable();
+    drawCurve();
+}
+
+function drawCurve() {
+    const canvas = document.getElementById('curve-canvas');
+    const ctx = canvas.getContext('2d');
+    const data = currentCurve.curveData;
+    
+    // Clear
+    ctx.fillStyle = '#16213e';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    if (data.length < 2) {
+        ctx.fillStyle = '#aaa';
+        ctx.font = '14px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('需要至少 2 個資料點', canvas.width / 2, canvas.height / 2);
+        return;
+    }
+    
+    // Calculate bounds
+    const xMin = Math.min(...data.map(p => p.x));
+    const xMax = Math.max(...data.map(p => p.x));
+    const yMin = Math.min(...data.map(p => p.y));
+    const yMax = Math.max(...data.map(p => p.y));
+    
+    const padding = 50;
+    const width = canvas.width - padding * 2;
+    const height = canvas.height - padding * 2;
+    
+    const xScale = v => padding + ((v - xMin) / (xMax - xMin || 1)) * width;
+    const yScale = v => canvas.height - padding - ((v - yMin) / (yMax - yMin || 1)) * height;
+    
+    // Draw grid
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 10; i++) {
+        const x = padding + (width / 10) * i;
+        const y = padding + (height / 10) * i;
+        ctx.beginPath();
+        ctx.moveTo(x, padding);
+        ctx.lineTo(x, canvas.height - padding);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(padding, y);
+        ctx.lineTo(canvas.width - padding, y);
+        ctx.stroke();
+    }
+    
+    // Draw axes
+    ctx.strokeStyle = '#666';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(padding, canvas.height - padding);
+    ctx.lineTo(canvas.width - padding, canvas.height - padding);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(padding, padding);
+    ctx.lineTo(padding, canvas.height - padding);
+    ctx.stroke();
+    
+    // Draw curve
+    ctx.strokeStyle = '#e94560';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(xScale(data[0].x), yScale(data[0].y));
+    for (let i = 1; i < data.length; i++) {
+        ctx.lineTo(xScale(data[i].x), yScale(data[i].y));
+    }
+    ctx.stroke();
+    
+    // Draw points
+    ctx.fillStyle = '#4ade80';
+    data.forEach(p => {
+        ctx.beginPath();
+        ctx.arc(xScale(p.x), yScale(p.y), 6, 0, Math.PI * 2);
+        ctx.fill();
+    });
+    
+    // Draw labels
+    ctx.fillStyle = '#aaa';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`X: ${xMin.toFixed(1)} - ${xMax.toFixed(1)}`, canvas.width / 2, canvas.height - 10);
+    ctx.save();
+    ctx.translate(15, canvas.height / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText(`Y: ${yMin.toFixed(1)} - ${yMax.toFixed(1)}`, 0, 0);
+    ctx.restore();
+}
+
+function saveCurve() {
+    if (currentCurve.curveType === null || currentCurve.curveData.length < 2) {
+        showToast('請先選擇曲線類型並加入至少 2 個資料點', 'error');
+        return;
+    }
+    
+    const curveObj = {
+        curveType: currentCurve.curveType,
+        description: document.getElementById('curve-description').value,
+        autonomous: document.getElementById('curve-autonomous').value === 'true',
+        openLoopTms: parseInt(document.getElementById('curve-open-loop-tms').value),
+        xMultiplier: parseInt(document.getElementById('curve-x-multiplier').value),
+        yMultiplier: parseInt(document.getElementById('curve-y-multiplier').value),
+        curveData: currentCurve.curveData
+    };
+    
+    console.log('Saving curve:', curveObj);
+    showToast('曲線已儲存 (模擬)', 'success');
+}
+
+function testInterpolation() {
+    if (currentCurve.curveData.length < 2) {
+        showToast('需要至少 2 個資料點進行插值', 'error');
+        return;
+    }
+    
+    const xValue = prompt('輸入 X 值進行插值計算:');
+    if (xValue === null) return;
+    
+    const x = parseFloat(xValue);
+    const data = currentCurve.curveData.sort((a, b) => a.x - b.x);
+    
+    let y;
+    if (x <= data[0].x) {
+        y = data[0].y;
+    } else if (x >= data[data.length - 1].x) {
+        y = data[data.length - 1].y;
+    } else {
+        for (let i = 0; i < data.length - 1; i++) {
+            if (x >= data[i].x && x <= data[i + 1].x) {
+                const t = (x - data[i].x) / (data[i + 1].x - data[i].x);
+                y = data[i].y + t * (data[i + 1].y - data[i].y);
+                break;
+            }
+        }
+    }
+    
+    showToast(`X = ${x} 時，Y = ${y.toFixed(2)}`, 'info');
+}
+
+function refreshCurves() {
+    showToast('重新整理曲線資料...', 'info');
+    // API call would go here
+}
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    drawCurve();
+    document.getElementById('curve-creation-time').value = new Date().toISOString();
+});
+</script>
+{% endblock %}

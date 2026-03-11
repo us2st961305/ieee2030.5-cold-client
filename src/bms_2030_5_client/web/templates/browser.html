@@ -1,0 +1,420 @@
+{% extends "base.html" %}
+
+{% block title %}資源瀏覽器 - BMS 2030.5{% endblock %}
+
+{% block content %}
+<h1>IEEE 2030.5 資源瀏覽器</h1>
+
+<!-- BMSClient Quick Links (if connected) -->
+{% if client_resources %}
+<div class="card" style="background: linear-gradient(135deg, var(--bg-secondary), #1e3a5f);">
+    <div class="card-header">
+        <h2>🔗 BMSClient 已註冊資源</h2>
+        <span class="status-badge status-running">已連線</span>
+    </div>
+    
+    <div class="quick-links">
+        {% if client_resources.edev_href %}
+        <a href="/browser?path={{ client_resources.edev_href }}" class="quick-link-item">
+            <span class="link-icon">📱</span>
+            <span class="link-label">EndDevice</span>
+            <span class="link-path">{{ client_resources.edev_href }}</span>
+        </a>
+        {% endif %}
+        {% if client_resources.der_path %}
+        <a href="/browser?path={{ client_resources.der_path }}" class="quick-link-item">
+            <span class="link-icon">⚡</span>
+            <span class="link-label">DER</span>
+            <span class="link-path">{{ client_resources.der_path }}</span>
+        </a>
+        {% endif %}
+        {% if client_resources.mup_href %}
+        <a href="/browser?path={{ client_resources.mup_href }}" class="quick-link-item">
+            <span class="link-icon">📊</span>
+            <span class="link-label">MirrorUsagePoint</span>
+            <span class="link-path">{{ client_resources.mup_href }}</span>
+        </a>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Resource Type Selector -->
+<div class="card">
+    <div class="card-header">
+        <h2>選擇資源類型</h2>
+    </div>
+    
+    <div class="resource-grid">
+        {% for rid, res in resources.items() %}
+        <a href="/browser?resource={{ rid }}" 
+           class="resource-item {% if current_resource == rid %}active{% endif %}">
+            <div class="resource-name">{{ res.name }}</div>
+            <div class="resource-path">{{ res.path }}</div>
+            <div class="resource-desc">{{ res.description }}</div>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Custom Path Input -->
+<div class="card">
+    <div class="card-header">
+        <h2>自訂路徑</h2>
+    </div>
+    
+    <form id="path-form" class="path-form">
+        <div class="form-row">
+            <input type="text" 
+                   id="custom-path" 
+                   name="path" 
+                   placeholder="/edev/1/der/1/ders"
+                   value="{{ current_path or '' }}"
+                   class="input-path">
+            <select id="profile-select" name="profile" class="input-select">
+                {% for profile in profiles %}
+                <option value="{{ profile.name }}" 
+                        {% if profile.name == current_profile %}selected{% endif %}>
+                    {{ profile.name }}
+                </option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-primary">取得 GET</button>
+        </div>
+    </form>
+</div>
+
+<!-- Response Display -->
+{% if response %}
+<div class="card">
+    <div class="card-header">
+        <h2>回應結果</h2>
+        <div class="response-meta">
+            <span class="status-badge status-{{ 'success' if response.status_code < 400 else 'error' }}">
+                HTTP {{ response.status_code }}
+            </span>
+            <span class="latency">{{ "%.2f"|format(response.latency_ms) }} ms</span>
+        </div>
+    </div>
+    
+    <!-- Links Found -->
+    {% if response.links %}
+    <div class="links-section">
+        <h3>發現的連結 ({{ response.links|length }})</h3>
+        <div class="links-grid">
+            {% for link in response.links %}
+            <a href="/browser?path={{ link.href }}&profile={{ current_profile }}" 
+               class="link-item">
+                <span class="link-tag">{{ link.tag }}</span>
+                <span class="link-href">{{ link.href }}</span>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Parsed Data -->
+    {% if response.parsed and response.parsed._type %}
+    <div class="parsed-section">
+        <h3>解析資料: {{ response.parsed._type }}</h3>
+        <div class="parsed-table">
+            {% for key, value in response.parsed.items() %}
+            {% if not key.startswith('_') %}
+            <div class="parsed-row">
+                <span class="parsed-key">{{ key }}</span>
+                <span class="parsed-value">
+                    {% if value is mapping %}
+                    <code>{{ value|tojson }}</code>
+                    {% else %}
+                    {{ value }}
+                    {% endif %}
+                </span>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Raw XML -->
+    <div class="xml-section">
+        <h3>
+            原始 XML
+            <button class="btn btn-secondary btn-sm" onclick="copyXml()">📋 複製</button>
+            <button class="btn btn-secondary btn-sm" onclick="toggleXml()">展開/收合</button>
+        </h3>
+        <pre id="xml-content" class="xml-content collapsed">{{ response.formatted }}</pre>
+    </div>
+</div>
+{% endif %}
+
+<!-- Error Display -->
+{% if error %}
+<div class="card error-card">
+    <div class="card-header">
+        <h2>❌ 錯誤</h2>
+    </div>
+    <div class="error-content">
+        <p>{{ error }}</p>
+    </div>
+</div>
+{% endif %}
+
+<style>
+    .resource-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 1rem;
+    }
+    
+    .resource-item {
+        display: block;
+        background: var(--bg-secondary);
+        padding: 1rem;
+        border-radius: 6px;
+        text-decoration: none;
+        transition: all 0.2s;
+        border: 2px solid transparent;
+    }
+    
+    .resource-item:hover {
+        background: var(--bg-primary);
+        border-color: var(--accent);
+    }
+    
+    .resource-item.active {
+        border-color: var(--accent);
+        background: var(--bg-primary);
+    }
+    
+    .resource-name {
+        font-weight: bold;
+        color: var(--text-primary);
+        margin-bottom: 0.25rem;
+    }
+    
+    .resource-path {
+        font-family: monospace;
+        color: var(--accent);
+        font-size: 0.9rem;
+    }
+    
+    .resource-desc {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        margin-top: 0.5rem;
+    }
+    
+    .path-form {
+        margin-top: 1rem;
+    }
+    
+    .form-row {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+    
+    .input-path {
+        flex: 1;
+        min-width: 300px;
+        padding: 0.75rem 1rem;
+        background: var(--bg-secondary);
+        border: 1px solid var(--text-secondary);
+        border-radius: 4px;
+        color: var(--text-primary);
+        font-family: monospace;
+    }
+    
+    .input-select {
+        padding: 0.75rem 1rem;
+        background: var(--bg-secondary);
+        border: 1px solid var(--text-secondary);
+        border-radius: 4px;
+        color: var(--text-primary);
+    }
+    
+    .response-meta {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+    }
+    
+    .latency {
+        color: var(--text-secondary);
+        font-size: 0.9rem;
+    }
+    
+    .links-section, .parsed-section, .xml-section {
+        margin-top: 1.5rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--bg-secondary);
+    }
+    
+    .links-section h3, .parsed-section h3, .xml-section h3 {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+    
+    .links-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+        gap: 0.5rem;
+    }
+    
+    .link-item {
+        display: flex;
+        flex-direction: column;
+        padding: 0.5rem;
+        background: var(--bg-secondary);
+        border-radius: 4px;
+        text-decoration: none;
+        transition: all 0.2s;
+    }
+    
+    .link-item:hover {
+        background: var(--bg-primary);
+    }
+    
+    .link-tag {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+    }
+    
+    .link-href {
+        font-family: monospace;
+        color: var(--info);
+        font-size: 0.9rem;
+    }
+    
+    .parsed-table {
+        display: grid;
+        gap: 0.5rem;
+    }
+    
+    .parsed-row {
+        display: grid;
+        grid-template-columns: 200px 1fr;
+        gap: 1rem;
+        padding: 0.5rem;
+        background: var(--bg-secondary);
+        border-radius: 4px;
+    }
+    
+    .parsed-key {
+        font-weight: bold;
+        color: var(--accent);
+    }
+    
+    .parsed-value {
+        word-break: break-all;
+    }
+    
+    .parsed-value code {
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+    }
+    
+    .xml-content {
+        background: var(--bg-secondary);
+        padding: 1rem;
+        border-radius: 4px;
+        overflow-x: auto;
+        font-size: 0.85rem;
+        white-space: pre;
+        max-height: 600px;
+        overflow-y: auto;
+    }
+    
+    .xml-content.collapsed {
+        max-height: 200px;
+    }
+    
+    .error-card {
+        border: 2px solid var(--error);
+    }
+    
+    .error-content {
+        color: var(--error);
+    }
+    
+    .btn-sm {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.8rem;
+    }
+    
+    /* Quick links for BMSClient resources */
+    .quick-links {
+        display: flex;
+        gap: 1rem;
+        flex-wrap: wrap;
+        margin-top: 1rem;
+    }
+    
+    .quick-link-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 1rem 1.5rem;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        text-decoration: none;
+        transition: all 0.2s;
+        min-width: 150px;
+    }
+    
+    .quick-link-item:hover {
+        background: rgba(255, 255, 255, 0.2);
+        transform: translateY(-2px);
+    }
+    
+    .link-icon {
+        font-size: 1.5rem;
+        margin-bottom: 0.5rem;
+    }
+    
+    .link-label {
+        font-weight: bold;
+        color: var(--text-primary);
+        margin-bottom: 0.25rem;
+    }
+    
+    .link-path {
+        font-family: monospace;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        word-break: break-all;
+        text-align: center;
+    }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Path form submission
+    document.getElementById('path-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const path = document.getElementById('custom-path').value;
+        const profile = document.getElementById('profile-select').value;
+        window.location.href = `/browser?path=${encodeURIComponent(path)}&profile=${profile}`;
+    });
+    
+    // Copy XML to clipboard
+    function copyXml() {
+        const xml = document.getElementById('xml-content').textContent;
+        navigator.clipboard.writeText(xml).then(() => {
+            showToast('XML 已複製到剪貼簿', 'success');
+        }).catch(() => {
+            showToast('複製失敗', 'error');
+        });
+    }
+    
+    // Toggle XML expand/collapse
+    function toggleXml() {
+        const content = document.getElementById('xml-content');
+        content.classList.toggle('collapsed');
+    }
+</script>
+{% endblock %}

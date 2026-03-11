@@ -10,6 +10,7 @@ packages = [{ include = "bms_2030_5_client", from = "src" }]
 [tool.poetry.dependencies]
 python = "^3.9"
 pymodbus = "^3.6.0"
+defusedxml = "^0.7.1"
 httpx = "^0.27.0"
 aiohttp = "^3.9.0"
 cryptography = "^42.0.0"
@@ -17,6 +18,7 @@ pyyaml = "^6.0.1"
 dataclasses-json = "^0.6.4"
 xsdata = {extras = ["lxml"], version = "^24.0"}
 structlog = "^24.1.0"
+flask = "^3.0.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
@@ -28,6 +30,7 @@ ruff = "^0.2.0"
 
 [tool.poetry.scripts]
 bms-client = "bms_2030_5_client.main:main"
+bms-web = "bms_2030_5_client.web.cli:main"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

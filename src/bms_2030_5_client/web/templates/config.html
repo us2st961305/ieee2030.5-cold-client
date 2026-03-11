@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Config - BMS 2030.5{% endblock %}
+
+{% block content %}
+<h1>Configuration Editor</h1>
+
+<div class="card">
+    <div class="card-header">
+        <h2>{{ config_path }}</h2>
+        <div class="btn-group">
+            <button id="btn-save" class="btn btn-secondary" onclick="saveConfig()">💾 Save</button>
+            <button id="btn-apply" class="btn btn-primary" onclick="applyConfig()">🚀 Save & Apply</button>
+        </div>
+    </div>
+    
+    {% if error %}
+    <div class="error-box">{{ error }}</div>
+    {% endif %}
+    
+    <div id="message-box" class="hidden"></div>
+    
+    <textarea id="config-editor" rows="30" spellcheck="false">{{ content }}</textarea>
+    
+    <p style="margin-top: 1rem; color: var(--text-secondary); font-size: 0.85rem;">
+        💡 <strong>Save</strong> writes the file only. <strong>Save & Apply</strong> also reloads the worker with new settings.
+    </p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const editor = document.getElementById('config-editor');
+    const messageBox = document.getElementById('message-box');
+    
+    // Tab support in textarea
+    editor.addEventListener('keydown', function(e) {
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            const start = this.selectionStart;
+            const end = this.selectionEnd;
+            this.value = this.value.substring(0, start) + '  ' + this.value.substring(end);
+            this.selectionStart = this.selectionEnd = start + 2;
+        }
+    });
+    
+    function showMessage(text, isError = false) {
+        messageBox.textContent = text;
+        messageBox.className = isError ? 'error-box' : 'success-box';
+        messageBox.classList.remove('hidden');
+        setTimeout(() => messageBox.classList.add('hidden'), 5000);
+    }
+    
+    async function saveConfig() {
+        const btn = document.getElementById('btn-save');
+        btn.disabled = true;
+        
+        const result = await apiCall('/api/config/save', 'POST', {
+            content: editor.value
+        });
+        
+        if (result.success) {
+            showMessage('✅ Configuration saved successfully');
+            showToast('Config saved', 'success');
+        } else {
+            showMessage('❌ ' + (result.error || 'Failed to save'), true);
+            showToast('Save failed', 'error');
+        }
+        
+        btn.disabled = false;
+    }
+    
+    async function applyConfig() {
+        const btn = document.getElementById('btn-apply');
+        btn.disabled = true;
+        
+        const result = await apiCall('/api/config/apply', 'POST', {
+            content: editor.value
+        });
+        
+        if (result.success) {
+            showMessage('✅ Configuration saved and applied. Worker state: ' + result.status.state);
+            showToast('Config applied', 'success');
+        } else {
+            showMessage('❌ ' + (result.error || 'Failed to apply'), true);
+            showToast('Apply failed', 'error');
+        }
+        
+        btn.disabled = false;
+    }
+    
+    // Warn before leaving with unsaved changes
+    let originalContent = editor.value;
+    window.addEventListener('beforeunload', function(e) {
+        if (editor.value !== originalContent) {
+            e.preventDefault();
+            e.returnValue = '';
+        }
+    });
+    
+    // Update original content after successful save
+    const origApiCall = window.apiCall;
+    window.apiCall = async function(...args) {
+        const result = await origApiCall(...args);
+        if (result.success && args[0].includes('/config/')) {
+            originalContent = editor.value;
+        }
+        return result;
+    };
+</script>
+{% endblock %}
