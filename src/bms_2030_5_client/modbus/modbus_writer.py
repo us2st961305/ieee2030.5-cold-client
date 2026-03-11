@@ -36,7 +36,7 @@ import logging
 import struct
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional, Union
 
@@ -94,7 +94,7 @@ class WriteResult:
     raw_registers: List[int]
     unit_id: int
     datatype: DataType
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     latency_ms: float = 0.0
     error: Optional[str] = None
     

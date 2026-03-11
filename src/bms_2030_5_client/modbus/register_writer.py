@@ -11,7 +11,7 @@ import asyncio
 import logging
 import struct
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Union
 
@@ -35,7 +35,7 @@ class WriteResult:
     address: int
     value: Union[int, float]
     raw_values: list[int]
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     error: Optional[str] = None
     latency_ms: float = 0.0
     

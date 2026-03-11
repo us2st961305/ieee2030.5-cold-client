@@ -10,7 +10,7 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class CycleTrackingData:
     
     def __post_init__(self):
         if self.timestamp is None:
-            self.timestamp = datetime.now()
+            self.timestamp = datetime.now(timezone.utc)
 
 
 class CycleStorageError(Exception):

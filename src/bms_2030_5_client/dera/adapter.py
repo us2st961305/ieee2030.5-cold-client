@@ -3,7 +3,7 @@ DER Availability adapter for converting BMS data to DERAvailability.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from bms_2030_5_client.models import (
@@ -83,7 +83,7 @@ class DERAvailabilityAdapter:
 
         return DERAvailability(
             href=href,
-            readingTime=int(datetime.now().timestamp()),
+            readingTime=int(datetime.now(timezone.utc).timestamp()),
             reserveChargePercent=int(avg_soc * 100),  # 0-10000
             reservePercent=int(avg_soc * 100),
             statWAvail=self._to_active_power(avail_discharge_w),

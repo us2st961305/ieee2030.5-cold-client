@@ -22,7 +22,7 @@ import ssl
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -59,7 +59,7 @@ class ParsedNotification:
     status: NotificationStatus     # newResourceURI or status
     new_resource_uri: Optional[str] = None
     resource_content: Optional[str] = None  # Embedded resource if present
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -367,7 +367,7 @@ class NotificationServerManager:
         )
         
         self._status.running = True
-        self._status.started_at = datetime.now()
+        self._status.started_at = datetime.now(timezone.utc)
         self._status.last_error = None
         
         log_buffer.add(
@@ -440,7 +440,7 @@ class NotificationServerManager:
             
             # Update stats
             self._status.notifications_received += processed
-            self._status.last_notification_at = datetime.now()
+            self._status.last_notification_at = datetime.now(timezone.utc)
             
             logger.info(f"Processed {processed} notification(s)")
             

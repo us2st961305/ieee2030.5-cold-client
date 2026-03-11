@@ -15,7 +15,7 @@ import logging
 import threading
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -38,7 +38,7 @@ class RequestType(str, Enum):
 class ResourceRequestLog:
     """資源請求/回應記錄 - 包含完整的請求與回應內容"""
     id: str
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
     # 請求資訊
     request_type: RequestType = RequestType.GET
@@ -95,7 +95,7 @@ class ResourceRequestLog:
 class FSARecord:
     """FSA 資源記錄"""
     id: str  # mRID or href
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
     # FSA 屬性
     href: Optional[str] = None
@@ -126,7 +126,7 @@ class FSARecord:
 class DERProgramRecord:
     """DERProgram 資源記錄"""
     id: str  # mRID
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
     # 程式屬性
     href: Optional[str] = None
@@ -164,7 +164,7 @@ class DERControlRecord:
     """DER 控制記錄"""
     # 基本資訊
     id: str
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
     # 控制來源
     source: str = "unknown"  # "polling" / "subscription" / "program:xxx"
@@ -451,7 +451,7 @@ class DERControlHistoryRecorder:
         with self._record_lock:
             if fsa_id in self._fsa_records:
                 record = self._fsa_records[fsa_id]
-                record.timestamp = datetime.now()
+                record.timestamp = datetime.now(timezone.utc)
                 record.version = version
                 record.program_count = program_count
                 if href:
@@ -512,7 +512,7 @@ class DERControlHistoryRecorder:
         with self._record_lock:
             if program_id in self._program_records:
                 record = self._program_records[program_id]
-                record.timestamp = datetime.now()
+                record.timestamp = datetime.now(timezone.utc)
                 record.version = version
                 record.primacy = primacy
                 record.control_count = control_count
@@ -623,7 +623,7 @@ class DERControlHistoryRecorder:
                 # 更新統計
                 if status == "active" and old_status != "active":
                     self._stats["total_executed"] += 1
-                    record.executed_at = datetime.now()
+                    record.executed_at = datetime.now(timezone.utc)
                 elif status == "completed":
                     self._stats["total_completed"] += 1
                 elif status == "failed":
@@ -646,7 +646,7 @@ class DERControlHistoryRecorder:
         with self._record_lock:
             record = self._records_by_id.get(control_id)
             if record:
-                record.executed_at = datetime.now()
+                record.executed_at = datetime.now(timezone.utc)
                 record.result_success = success
                 record.result_simulated = simulated
                 record.result_message = message
@@ -676,7 +676,7 @@ class DERControlHistoryRecorder:
             if record:
                 record.response_sent = True
                 record.response_status = response_status
-                record.response_time = datetime.now()
+                record.response_time = datetime.now(timezone.utc)
                 self._stats["total_responses_sent"] += 1
                 
                 logger.debug(f"Control {control_id} response: {response_status}")

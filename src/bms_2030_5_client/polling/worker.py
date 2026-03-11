@@ -21,7 +21,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 from xml.etree import ElementTree as ET
@@ -62,7 +62,7 @@ class PollResult:
     target_id: str
     target_name: str
     status: PollStatus
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
     # HTTP response info
     http_status: Optional[int] = None
@@ -614,7 +614,7 @@ class PollingWorker:
         
         with self._lock:
             self._state = PollingWorkerState.RUNNING
-            self._started_at = datetime.now()
+            self._started_at = datetime.now(timezone.utc)
         
         logger.info(f"Polling worker running with {len(self._target_states)} targets")
         

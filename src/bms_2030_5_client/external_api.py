@@ -26,7 +26,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import IntEnum
 from typing import Callable, Optional, List, Dict, Any, Union
 from queue import Queue
@@ -108,7 +108,7 @@ class PowerCommand:
     ramp_rate_w_per_s: int = 0
     is_active: bool = False
     sequence_number: int = 0
-    created_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
     def to_dict(self) -> Dict[str, Any]:
         """轉換為字典格式"""
@@ -162,7 +162,7 @@ class BMSStatusReport:
         cycle_count: 循環次數
         rack_data: 各電池架詳細資料 (可選)
     """
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     system_voltage: float = 0.0
     system_current: float = 0.0
     system_soc: float = 0.0
@@ -266,7 +266,7 @@ class CommandAcknowledgment:
     actual_power_w: int = 0
     error_code: int = 0
     error_message: str = ""
-    executed_at: datetime = field(default_factory=datetime.now)
+    executed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass
@@ -487,12 +487,12 @@ class ExternalIntegrationAPI:
             ramp_rate_w_per_s=ramp_rate_w_per_s,
             is_active=True,
             sequence_number=self._command_sequence,
-            created_at=datetime.now(),
+            created_at=datetime.now(timezone.utc),
         )
         
         # 更新當前命令
         self._current_command = command
-        self._last_command_time = datetime.now()
+        self._last_command_time = datetime.now(timezone.utc)
         self._total_commands_sent += 1
         
         # 儲存歷史
@@ -556,7 +556,7 @@ class ExternalIntegrationAPI:
             actual_power_w=actual_power_w,
             error_code=error_code,
             error_message=error_message,
-            executed_at=datetime.now(),
+            executed_at=datetime.now(timezone.utc),
         )
         
         if success:
@@ -657,7 +657,7 @@ class ExternalIntegrationAPI:
             bool: 是否成功接收
         """
         self._last_status = status
-        self._last_status_time = datetime.now()
+        self._last_status_time = datetime.now(timezone.utc)
         
         logger.debug(
             f"BMS status received: SOC={status.system_soc:.1f}%, "
@@ -696,7 +696,7 @@ class ExternalIntegrationAPI:
         if isinstance(timestamp, str):
             timestamp = datetime.fromisoformat(timestamp)
         elif timestamp is None:
-            timestamp = datetime.now()
+            timestamp = datetime.now(timezone.utc)
         
         status = BMSStatusReport(
             timestamp=timestamp,

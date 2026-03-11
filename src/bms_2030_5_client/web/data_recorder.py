@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Deque, Dict, List, Optional
 
@@ -147,7 +147,7 @@ class DataRecorder:
             raw_registers: Raw register values (optional)
         """
         record = ModbusRecord(
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             source="system",
             data=data,
             raw_registers=raw_registers,
@@ -173,7 +173,7 @@ class DataRecorder:
             raw_registers: Raw register values (optional)
         """
         record = ModbusRecord(
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             source=f"rack_{rack_id}",
             data=data,
             raw_registers=raw_registers,
@@ -255,7 +255,7 @@ class DataRecorder:
             success: Whether the upload was successful
         """
         record = MeterUploadRecord(
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             mup_href=mup_href,
             description=description,
             readings=readings,
@@ -289,7 +289,7 @@ class DataRecorder:
             success: Whether the upload was successful
         """
         record = DERStatusRecord(
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             der_path=der_path,
             status=status,
             status_code=status_code,

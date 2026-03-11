@@ -10,7 +10,7 @@ import logging
 import threading
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Deque, List, Optional
 
 
@@ -68,7 +68,7 @@ class LogBuffer:
             timestamp: Entry timestamp (defaults to now)
         """
         entry = LogEntry(
-            timestamp=timestamp or datetime.now(),
+            timestamp=timestamp or datetime.now(timezone.utc),
             level=level.upper(),
             logger_name=logger_name,
             message=message,

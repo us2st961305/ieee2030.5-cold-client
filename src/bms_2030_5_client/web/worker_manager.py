@@ -10,7 +10,7 @@ import asyncio
 import logging
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Callable, Any
@@ -95,7 +95,7 @@ class WorkerManager:
             if error:
                 self._status.last_error = error
             if state == WorkerState.RUNNING and self._status.started_at is None:
-                self._status.started_at = datetime.now()
+                self._status.started_at = datetime.now(timezone.utc)
             elif state == WorkerState.STOPPED:
                 self._status.started_at = None
                 self._status.subscription_active = False
@@ -270,7 +270,7 @@ class WorkerManager:
     def update_poll_status(self) -> None:
         """Update last poll timestamp (called from worker)."""
         with self._lock:
-            self._status.last_poll_at = datetime.now()
+            self._status.last_poll_at = datetime.now(timezone.utc)
             self._status.poll_count += 1
 
 

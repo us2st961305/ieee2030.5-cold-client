@@ -11,7 +11,7 @@ import asyncio
 import logging
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
@@ -190,7 +190,7 @@ class ClientManager:
         """Callback when new BMS snapshot is available."""
         from bms_2030_5_client.web.data_recorder import get_data_recorder
         
-        self._status.last_report_at = datetime.now()
+        self._status.last_report_at = datetime.now(timezone.utc)
         self._status.report_count += 1
         
         # Store snapshot as dict
@@ -202,7 +202,7 @@ class ClientManager:
                 "current": getattr(snapshot, "current", None),
                 "soc": getattr(snapshot, "soc", None),
                 "power": getattr(snapshot, "power", None),
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         
         # Record to data recorder
@@ -271,7 +271,7 @@ class ClientManager:
             
             # Update status
             self._status.state = ClientState.RUNNING
-            self._status.started_at = datetime.now()
+            self._status.started_at = datetime.now(timezone.utc)
             self._status.modbus_connected = True
             self._status.ieee2030_5_connected = True
             self._status.edev_href = self._client._edev_href

@@ -11,7 +11,7 @@ import ssl
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Type, TypeVar
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 from cryptography import x509
@@ -545,7 +545,7 @@ class IEEE2030_5Client:
         logger.info(f"Registering new device with sFDI: {self.sfdi}")
         end_device = EndDevice(
             sFDI=self.sfdi,
-            changedTime=int(datetime.now().timestamp()),
+            changedTime=int(datetime.now(timezone.utc).timestamp()),
         )
         
         _, location = await self._post(edev_list_link.href, end_device)

@@ -21,7 +21,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 from uuid import uuid4
@@ -210,7 +210,7 @@ class EmergencyStop:
         """觸發緊急停止"""
         cls._stopped = True
         cls._reason = reason
-        cls._timestamp = datetime.utcnow()
+        cls._timestamp = datetime.now(timezone.utc)
         power_audit_logger.critical(
             f"EMERGENCY_STOP | reason={reason} | timestamp={cls._timestamp.isoformat()}"
         )
@@ -370,7 +370,7 @@ class SafePowerController:
             PowerControlResult 包含操作結果
         """
         request_id = str(uuid4())[:8]
-        timestamp = datetime.utcnow()
+        timestamp = datetime.now(timezone.utc)
         
         # 1. 檢查緊急停止
         if EmergencyStop.is_stopped():
@@ -519,7 +519,7 @@ class SafePowerController:
             f"source={source} | "
             f"status={status} | "
             f"errors={errors if errors else 'none'} | "
-            f"timestamp={datetime.utcnow().isoformat()}"
+            f"timestamp={datetime.now(timezone.utc).isoformat()}"
         )
 
 

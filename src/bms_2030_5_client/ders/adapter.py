@@ -3,7 +3,7 @@ DER Status adapter for converting BMS data to DERStatus.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from bms_2030_5_client.models import (
@@ -146,7 +146,7 @@ class DERStatusAdapter:
         # Convert to IEEE 2030.5 format: 0-10000
         value = int(clamped * 100)
         return StateOfCharge(
-            dateTime=int(datetime.now().timestamp()),
+            dateTime=int(datetime.now(timezone.utc).timestamp()),
             value=value
         )
 
@@ -212,7 +212,7 @@ class DERStatusAdapter:
         # Aggregate alarm status from all racks
         alarm_status = self._aggregate_alarm_status(snapshot)
         
-        ts = int(datetime.now().timestamp())
+        ts = int(datetime.now(timezone.utc).timestamp())
 
         # Use system total_soc from register 4005 as primary source,
         # fallback to average_soc from active racks if system SOC is 0

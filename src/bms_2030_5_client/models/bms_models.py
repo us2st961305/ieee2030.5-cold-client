@@ -5,7 +5,7 @@ Based on CUBE 電池組暫存器通訊表 V1.0.3
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import IntEnum
 from typing import List, Optional
 
@@ -87,7 +87,7 @@ class RackData:
     max_discharge_current: float = 0.0  # A
     max_charge_voltage: float = 0.0  # V
     min_discharge_voltage: float = 0.0  # V
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
     def cell_voltage_diff(self) -> float:
@@ -157,7 +157,7 @@ class RackData:
             max_discharge_current=registers[20] * 0.1,  # 7020: 0.1A
             max_charge_voltage=registers[21] * 0.1,  # 7021: 0.1V
             min_discharge_voltage=registers[23] * 0.1,  # 7023: 0.1V
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
         )
 
 
@@ -207,7 +207,7 @@ class SystemData:
     max_temperature: float = 0.0  # °C (from 4016: all_max_t)
     min_temperature: float = 0.0  # °C (from 4017: all_min_t)
     rack_enable_status: List[bool] = field(default_factory=lambda: [False] * 24)
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @classmethod
     def from_registers(cls, registers: List[int]) -> "SystemData":
@@ -254,7 +254,7 @@ class SystemData:
             allowed_discharge_power=registers[42] * 0.1 if len(registers) > 42 else 0,  # 4042
             allowed_charge_power=registers[43] * 0.1 if len(registers) > 43 else 0,  # 4043
             rack_enable_status=rack_status,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
         )
 
 
@@ -263,7 +263,7 @@ class BMSSnapshot:
     """Complete BMS system snapshot."""
     system: SystemData
     racks: List[RackData]
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
     def active_racks(self) -> List[RackData]:

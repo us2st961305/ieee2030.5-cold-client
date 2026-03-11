@@ -27,7 +27,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Set
 from xml.etree import ElementTree as ET
@@ -107,7 +107,7 @@ class TrackedSubscription:
         """Check if subscription needs renewal."""
         if not self.is_active or not self.next_renewal_at:
             return False
-        return datetime.now() >= self.next_renewal_at
+        return datetime.now(timezone.utc) >= self.next_renewal_at
     
     def to_dict(self) -> dict:
         """Convert to dictionary for API/logging."""
@@ -413,8 +413,8 @@ class SubscriptionManager:
             success = await self._create_subscription(tracked)
             if success:
                 tracked.state = SubscriptionState.ACTIVE
-                tracked.created_at = datetime.now()
-                tracked.last_renewed_at = datetime.now()
+                tracked.created_at = datetime.now(timezone.utc)
+                tracked.last_renewed_at = datetime.now(timezone.utc)
                 tracked.failure_count = 0
                 self._update_next_renewal(tracked)
                 self._stats["subscriptions_created"] += 1
@@ -566,7 +566,7 @@ class SubscriptionManager:
         for tracked in self._subscriptions.values():
             if tracked.is_active:
                 # Force renewal on next check
-                tracked.next_renewal_at = datetime.now()
+                tracked.next_renewal_at = datetime.now(timezone.utc)
     
     def register_on_reconnect(self, callback: Callable[[], None]) -> None:
         """
@@ -723,7 +723,7 @@ class SubscriptionManager:
         # Simulation mode
         if self._simulation_mode:
             logger.info(f"[SIMULATION] Renew subscription: {config.id}")
-            tracked.last_renewed_at = datetime.now()
+            tracked.last_renewed_at = datetime.now(timezone.utc)
             tracked.renewal_count += 1
             self._update_next_renewal(tracked)
             self._stats["subscriptions_renewed"] += 1
@@ -744,7 +744,7 @@ class SubscriptionManager:
             
             if success:
                 tracked.state = SubscriptionState.ACTIVE
-                tracked.last_renewed_at = datetime.now()
+                tracked.last_renewed_at = datetime.now(timezone.utc)
                 tracked.renewal_count += 1
                 self._update_next_renewal(tracked)
                 self._stats["subscriptions_renewed"] += 1
@@ -772,7 +772,7 @@ class SubscriptionManager:
         
         # Calculate next renewal
         from datetime import timedelta
-        tracked.next_renewal_at = datetime.now() + timedelta(hours=interval_hours)
+        tracked.next_renewal_at = datetime.now(timezone.utc) + timedelta(hours=interval_hours)
     
     def _get_subscription_list_uri(self, resource_uri: str) -> str:
         """

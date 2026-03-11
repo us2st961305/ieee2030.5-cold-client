@@ -6,7 +6,7 @@ This adapter now delegates to specialized modules for better organization.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 
 from bms_2030_5_client.models import (
@@ -113,7 +113,7 @@ class BMSAdapter:
         # Convert to IEEE 2030.5 format: 0-10000
         value = int(clamped * 100)
         return StateOfCharge(
-            dateTime=int(datetime.now().timestamp()),
+            dateTime=int(datetime.now(timezone.utc).timestamp()),
             value=value
         )
 
@@ -190,7 +190,7 @@ class BMSAdapter:
             setMaxChargeRateW=self._to_active_power(max_charge_w),
             setMaxDischargeRateW=self._to_active_power(max_discharge_w),
             setVRef=self._to_voltage(self.nominal_voltage),
-            updatedTime=int(datetime.now().timestamp()),
+            updatedTime=int(datetime.now(timezone.utc).timestamp()),
         )
 
     def create_der_capability(

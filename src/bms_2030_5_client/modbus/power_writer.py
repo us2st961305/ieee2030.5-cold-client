@@ -18,7 +18,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Callable, Optional, Awaitable
 
@@ -76,7 +76,7 @@ class PowerWriteResult:
     simulated: bool
     requested_power_w: int
     actual_power_w: Optional[int] = None
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     error_message: Optional[str] = None
     register_address: Optional[int] = None
     raw_value: Optional[int] = None
@@ -176,7 +176,7 @@ class ModbusPowerWriter:
         Returns:
             PowerWriteResult 包含寫入結果
         """
-        timestamp = datetime.utcnow()
+        timestamp = datetime.now(timezone.utc)
         
         # 1. 透過安全控制器驗證和執行
         control_result = await self.power_controller.set_power_setpoint(
@@ -227,7 +227,7 @@ class ModbusPowerWriter:
         
         ⚠️ 此方法只在生產模式下被調用
         """
-        timestamp = datetime.utcnow()
+        timestamp = datetime.now(timezone.utc)
         
         # 計算暫存器值
         register_value = self._power_to_register_value(power_w)
@@ -374,7 +374,7 @@ class ModbusPowerWriter:
         """
         power_audit_logger.warning(
             f"DE_ENERGIZE | reason={reason} | "
-            f"timestamp={datetime.utcnow().isoformat()}"
+            f"timestamp={datetime.now(timezone.utc).isoformat()}"
         )
         
         return await self.set_power(0, source=f"de-energize:{reason}")
@@ -396,7 +396,7 @@ class ModbusPowerWriter:
             success=True,
             simulated=self.power_controller.simulation_mode,
             requested_power_w=0,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             error_message=f"Emergency stop: {reason}"
         )
 
