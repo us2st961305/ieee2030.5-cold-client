@@ -412,6 +412,16 @@ load_dotenv()  # 讀取專案 .env
 export $(grep -v '^#' .env | xargs) && python your_script.py
 ```
 
+### 🛑 知識庫連線斷路器 (Knowledge Base Circuit Breaker)
+
+**CRITICAL: 所有 Agent 在執行任何任務（包含原始碼掃描、讀取、分析或修改）之前，必須先完成 ChromaDB 的連線測試與認證。**
+
+1. Agent 必須嘗試獲取 `CHROMA_AUTH_TOKEN` 並對知識庫發起測試查詢。
+2. **強制中斷條件（Halt Condition）**：如果發生以下任一狀況，Agent **必須立即終止所有操作**，輸出連線失敗的錯誤報告，且**絕對禁止**進行任何程式碼的生成、修改或提供實作建議：
+   - 發現環境中缺少有效的 `CHROMA_AUTH_TOKEN`。
+   - ChromaDB 回應 401 Unauthorized 或連線失敗。
+3. 理由：本專案具備高度上下文依賴，在未成功取得 ChromaDB 歷史風險紀錄與協議規範授權前，任何盲目的程式碼更動皆被視為嚴重違反專案安全與架構規範。
+
 ---
 
 ## ⚠️ Power Control Safety Rules (功率控制安全規範)
