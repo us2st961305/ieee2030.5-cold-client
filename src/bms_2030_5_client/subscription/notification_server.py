@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 import xml.etree.ElementTree as ET
+from defusedxml.ElementTree import fromstring as _safe_fromstring
 
 from aiohttp import web
 
@@ -38,7 +39,7 @@ class NotificationServerConfig:
     """HTTPS 通知服務器配置"""
     
     # 監聽設定
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"  # Loopback only; use "0.0.0.0" when server is on a different host
     port: int = 8443
     endpoint: str = "/notify"
     
@@ -55,6 +56,8 @@ class NotificationServerConfig:
     
     # 服務器配置
     request_timeout_s: float = 30.0
+    # 最大 XML 請求內容大小 (防止 Billion Laughs / XML bomb DoS 攻擊)
+    max_xml_body_size: int = 65536  # 64 KB
 
 
 # Type alias for notification callback
@@ -183,6 +186,14 @@ class NotificationServer:
             content_type = request.content_type
             raw_xml = await request.text()
             
+            # 檢查內容大小 (防止 XML bomb DoS 攻擊)
+            if len(raw_xml) > self.config.max_xml_body_size:
+                logger.warning(
+                    f"Notification body too large: {len(raw_xml)} bytes "
+                    f"(limit: {self.config.max_xml_body_size} bytes)"
+                )
+                return web.Response(status=413, text="Request body too large")
+            
             logger.debug(f"Received notification: {raw_xml[:200]}...")
             
             # 檢查內容類型
@@ -221,7 +232,7 @@ class NotificationServer:
             self._stats["errors"] += 1
             return web.Response(
                 status=400,
-                text=f"Failed to process notification: {e}"
+                text="Bad Request"
             )
     
     def _parse_notification(self, xml_str: str) -> Notification:
@@ -235,7 +246,7 @@ class NotificationServer:
             Notification 物件
         """
         try:
-            root = ET.fromstring(xml_str)
+            root = _safe_fromstring(xml_str)
             
             # 移除命名空間前綴
             def strip_ns(tag: str) -> str:

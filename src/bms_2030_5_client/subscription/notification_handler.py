@@ -25,6 +25,7 @@ import asyncio
 import logging
 import time
 import xml.etree.ElementTree as ET
+from defusedxml.ElementTree import fromstring as _safe_fromstring
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Dict, Optional, TYPE_CHECKING
 
@@ -269,7 +270,7 @@ class NotificationHandler:
     def _extract_der_control(self, raw_xml: str) -> Optional[DERControl]:
         """從通知 XML 中提取 DERControl"""
         try:
-            root = ET.fromstring(raw_xml)
+            root = _safe_fromstring(raw_xml)
             
             # 尋找 Resource 元素
             for child in root:
@@ -484,7 +485,7 @@ class NotificationHandler:
     def _extract_default_control(self, raw_xml: str) -> Optional[DefaultDERControl]:
         """從通知 XML 中提取 DefaultDERControl"""
         try:
-            root = ET.fromstring(raw_xml)
+            root = _safe_fromstring(raw_xml)
             
             for child in root:
                 tag = self._strip_ns(child.tag)

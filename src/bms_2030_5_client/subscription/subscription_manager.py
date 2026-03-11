@@ -259,9 +259,10 @@ class SubscriptionManager:
             self._tracked_fsa[fsa_id] = fsa
             
             # 訂閱 DERProgram 清單
-            if fsa.DERProgramListLink:
+            derp_href = fsa.get_der_program_list_href()
+            if derp_href:
                 await self._subscribe(
-                    resource_path=fsa.DERProgramListLink,
+                    resource_path=derp_href,
                     subscription_type=SubscriptionType.DERP,
                     edev_href=edev_href
                 )
@@ -275,12 +276,13 @@ class SubscriptionManager:
         edev_href: str
     ) -> None:
         """設定 DERControl 相關訂閱"""
-        if not fsa.DERProgramListLink:
+        derp_href = fsa.get_der_program_list_href()
+        if not derp_href:
             return
         
         try:
             program_list = await self.http_client._get(
-                fsa.DERProgramListLink,
+                derp_href,
                 DERProgramList
             )
             
@@ -292,17 +294,19 @@ class SubscriptionManager:
                 self._tracked_programs[prog_id] = program
                 
                 # 訂閱 DERControlList（非 ActiveDERControlListLink - 已棄用）
-                if program.DERControlListLink:
+                derc_href = program.get_der_control_list_href()
+                if derc_href:
                     await self._subscribe(
-                        resource_path=program.DERControlListLink,
+                        resource_path=derc_href,
                         subscription_type=SubscriptionType.DERC,
                         edev_href=edev_href
                     )
                 
                 # 訂閱 DefaultDERControl
-                if program.DefaultDERControlLink:
+                dderc_href = program.get_default_der_control_href()
+                if dderc_href:
                     await self._subscribe(
-                        resource_path=program.DefaultDERControlLink,
+                        resource_path=dderc_href,
                         subscription_type=SubscriptionType.DDERC,
                         edev_href=edev_href
                     )
@@ -553,17 +557,20 @@ class SubscriptionManager:
         fsa = self._tracked_fsa[fsa_id]
         
         # 取消訂閱相關的 DERProgram
-        if fsa.DERProgramListLink:
-            await self._unsubscribe(fsa.DERProgramListLink)
+        derp_href = fsa.get_der_program_list_href()
+        if derp_href:
+            await self._unsubscribe(derp_href)
         
         # 移除追蹤的程式
         programs_to_remove = []
         for prog_id, program in self._tracked_programs.items():
             # 簡化：移除所有相關訂閱
-            if program.DERControlListLink:
-                await self._unsubscribe(program.DERControlListLink)
-            if program.DefaultDERControlLink:
-                await self._unsubscribe(program.DefaultDERControlLink)
+            derc_href = program.get_der_control_list_href()
+            if derc_href:
+                await self._unsubscribe(derc_href)
+            dderc_href = program.get_default_der_control_href()
+            if dderc_href:
+                await self._unsubscribe(dderc_href)
             programs_to_remove.append(prog_id)
         
         for prog_id in programs_to_remove:

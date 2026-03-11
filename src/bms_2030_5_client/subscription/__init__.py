@@ -22,10 +22,6 @@ from bms_2030_5_client.subscription.notification_handler import (
     NotificationHandler,
     NotificationHandlerConfig,
 )
-from bms_2030_5_client.subscription.time_sync import (
-    TimeSyncClient,
-    TimeSyncConfig,
-)
 
 __all__ = [
     # Notification Server
@@ -38,7 +34,4 @@ __all__ = [
     # Notification Handler
     "NotificationHandler",
     "NotificationHandlerConfig",
-    # Time Sync
-    "TimeSyncClient",
-    "TimeSyncConfig",
 ]

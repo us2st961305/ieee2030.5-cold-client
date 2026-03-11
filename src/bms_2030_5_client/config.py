@@ -65,12 +65,20 @@ class SubscriptionConfig:
     Reference: IEEE Std 2030.5-2023, Clause 8.9
     """
     enabled: bool = False
-    notification_host: str = "0.0.0.0"  # Listen on all interfaces
+    notification_host: str = "127.0.0.1"  # Loopback only; use "0.0.0.0" when the IEEE 2030.5 server is on a different host
     notification_port: int = 8443
     # Public URI for server to send notifications (must be reachable by server)
     public_uri: Optional[str] = None  # If None, uses notification_host:notification_port
     time_sync_interval: int = 900  # 15 minutes (mandatory polling for /tm)
     subscription_renewal_interval: int = 86400  # 24 hours
+
+
+@dataclass
+class SupabaseConfig:
+    """Supabase reporting configuration."""
+    url: str = ""
+    service_key: str = ""
+    battery_status_interval: int = 300  # 5 minutes
 
 
 @dataclass
@@ -81,6 +89,7 @@ class Config:
     registers: RegisterConfig = field(default_factory=RegisterConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     subscription: SubscriptionConfig = field(default_factory=SubscriptionConfig)
+    supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
 
     @classmethod
     def from_yaml(cls, path: Union[str, Path]) -> "Config":
@@ -115,6 +124,9 @@ class Config:
 
         if "subscription" in data:
             config.subscription = SubscriptionConfig(**data["subscription"])
+
+        if "supabase" in data:
+            config.supabase = SupabaseConfig(**data["supabase"])
 
         return config
 
@@ -165,6 +177,11 @@ class Config:
                 "public_uri": self.subscription.public_uri,
                 "time_sync_interval": self.subscription.time_sync_interval,
                 "subscription_renewal_interval": self.subscription.subscription_renewal_interval,
+            },
+            "supabase": {
+                "url": self.supabase.url,
+                "service_key": self.supabase.service_key,
+                "battery_status_interval": self.supabase.battery_status_interval,
             },
         }
 
