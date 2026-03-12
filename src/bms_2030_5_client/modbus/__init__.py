@@ -6,6 +6,8 @@ from bms_2030_5_client.modbus.modbus_client import (
     ModbusBMSClient,
     BMSDataCollector,
     ModbusClientError,
+    ModbusConnectionState,
+    ModbusHealthStatus,
 )
 from bms_2030_5_client.modbus.power_writer import (
     ModbusPowerWriter,
@@ -31,6 +33,8 @@ __all__ = [
     "ModbusBMSClient",
     "BMSDataCollector",
     "ModbusClientError",
+    "ModbusConnectionState",
+    "ModbusHealthStatus",
     # Power writing
     "ModbusPowerWriter",
     "ModbusPowerWriterConfig",

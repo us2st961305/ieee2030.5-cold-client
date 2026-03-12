@@ -47,6 +47,9 @@ class ClientStatus:
     modbus_connected: bool = False
     ieee2030_5_connected: bool = False
     
+    # Modbus health (populated from BMSDataCollector)
+    modbus_health: Optional[Dict[str, Any]] = None
+    
     # Registration status
     edev_href: Optional[str] = None
     der_path: Optional[str] = None
@@ -87,6 +90,7 @@ class ClientStatus:
             "der_control_count": self.der_control_count,
             "der_control_stats": self.der_control_stats,
             "latest_snapshot": self.latest_snapshot,
+            "modbus_health": self.modbus_health,
         }
 
 
@@ -186,6 +190,15 @@ class ClientManager:
             except Exception as e:
                 logger.warning(f"Status callback error: {e}")
     
+    def _on_modbus_health_change(self, health) -> None:
+        """Callback when Modbus connection health state changes."""
+        from bms_2030_5_client.modbus.modbus_client import ModbusConnectionState
+        self._status.modbus_connected = (
+            health.state == ModbusConnectionState.CONNECTED
+        )
+        self._status.modbus_health = health.to_dict()
+        self._notify_callbacks()
+
     def _on_bms_snapshot(self, snapshot: "BMSSnapshot") -> None:
         """Callback when new BMS snapshot is available."""
         from bms_2030_5_client.web.data_recorder import get_data_recorder
@@ -266,6 +279,9 @@ class ClientManager:
             # Add snapshot callback
             self._client.add_callback(self._on_bms_snapshot)
             
+            # Register Modbus health state callback for real-time status updates
+            self._client.data_collector.add_state_callback(self._on_modbus_health_change)
+
             # Start client
             await self._client.start()
             

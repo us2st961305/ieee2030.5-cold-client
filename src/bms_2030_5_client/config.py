@@ -34,6 +34,9 @@ class ModbusConfig:
     timeout: float = 5.0
     rack_count: int = 4
     refresh_interval: float = 60.0
+    # Read/write retry settings
+    read_max_retries: int = 3
+    read_retry_base_delay: float = 0.1
 
 
 @dataclass
