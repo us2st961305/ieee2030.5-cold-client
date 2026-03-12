@@ -53,8 +53,10 @@ src/bms_2030_5_client/
 ├── web/               # Flask Web UI（client_manager、app、templates）
 ├── client.py          # 主 BMSClient 整合層
 ├── config.py          # 配置管理（YAML → dataclass）
+├── logging_setup.py   # 統一 logging 設定（structlog + file rotation + buffer）
 ├── power_control.py   # 安全功率控制器 + 緊急停機
 ├── runtime_config.py  # 執行時配置（runtime.yaml）
+├── task_supervisor.py # 背景 Task 監控 + 自動重啟（exponential backoff）
 ├── cycle_storage.py   # 充放電循環計數持久化
 ├── external_api.py    # 外部整合 API
 └── main.py            # CLI 入口點
@@ -67,6 +69,8 @@ src/bms_2030_5_client/
 - **Singleton Pattern**: `ClientManager` 管理 BMSClient 生命週期
 - **Observer Pattern**: Callback 機制（BMSDataCollector → BMSClient → ClientManager → Web UI）
 - **State Machine**: BMSDataCollector 使用 `ModbusConnectionState` 管理連線健康
+- **Supervisor Pattern**: `TaskSupervisor` 監控全部背景 asyncio Task，異常時自動重啟（exponential backoff）
+- **Structured Logging**: `structlog` 統一日誌（JSON / 彩色 console），搭配 `RotatingFileHandler` 寫入磁碟
 
 ---
 
@@ -122,7 +126,7 @@ graph LR
 | defusedxml | XML 安全解析（防 XXE） |
 | flask | Web UI |
 | pyyaml | 配置檔載入 |
-| structlog | 結構化日誌 |
+| structlog | 結構化日誌（JSON / 彩色 console，搭配 RotatingFileHandler）|
 
 ### 內部模組依賴
 
