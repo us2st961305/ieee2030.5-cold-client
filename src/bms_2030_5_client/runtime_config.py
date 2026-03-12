@@ -531,6 +531,8 @@ class LoggingConfig:
     format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     file: Optional[str] = None
     buffer_size: int = 500
+    max_bytes: int = 10 * 1024 * 1024  # 10 MB per log file
+    backup_count: int = 5              # number of rotated files to keep
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "LoggingConfig":
@@ -540,6 +542,8 @@ class LoggingConfig:
             format=data.get("format", cls.format),
             file=data.get("file"),
             buffer_size=data.get("buffer_size", cls.buffer_size),
+            max_bytes=data.get("max_bytes", cls.max_bytes),
+            backup_count=data.get("backup_count", cls.backup_count),
         )
 
 

@@ -66,6 +66,7 @@ from bms_2030_5_client.cycle_storage import (
     CycleStorage,
     CycleTrackingData,
 )
+from bms_2030_5_client.task_supervisor import TaskSupervisor
 
 logger = logging.getLogger(__name__)
 
@@ -137,8 +138,6 @@ class BMSClient:
         
         # State
         self._running = False
-        self._reporting_task: Optional[asyncio.Task] = None
-        self._metering_task: Optional[asyncio.Task] = None
         self._edev_href: Optional[str] = None  # EndDevice href (e.g., /edev/97)
         self._der_path: Optional[str] = None
         self._mup_href: Optional[str] = None  # MirrorUsagePoint href
@@ -172,9 +171,13 @@ class BMSClient:
         # Persistent HTTP client for Supabase reporting (created on start, closed on stop)
         self._supabase_client: Optional[httpx.AsyncClient] = None
 
-        # IEEE 2030.5 reconnection tracking
-        self._ieee2030_5_consecutive_failures: int = 0
+        # IEEE 2030.5 reconnection tracking (independent per-loop counters)
+        self._reporting_consecutive_failures: int = 0
+        self._metering_consecutive_failures: int = 0
         self._ieee2030_5_failure_threshold: int = 3  # trigger reconnect after N failures
+
+        # Task supervisor for background task resilience
+        self._supervisor = TaskSupervisor()
     
     def _init_cycle_tracking(self) -> None:
         """
@@ -652,17 +655,24 @@ class BMSClient:
         # Start data collection
         await self.data_collector.start()
 
-        # Start reporting task
+        # Start background tasks via supervisor
         self._running = True
-        self._reporting_task = asyncio.create_task(self._reporting_loop())
+        self._supervisor.register(
+            "reporting", lambda: self._reporting_loop(),
+            max_restarts=10, backoff_base=2.0, backoff_max=300.0,
+        )
 
-        # Start metering task if enabled
         if self.enable_metering:
             if self._mup_href:
                 logger.info(f"Starting metering task with MUP: {self._mup_href}")
-                self._metering_task = asyncio.create_task(self._metering_loop())
+                self._supervisor.register(
+                    "metering", lambda: self._metering_loop(),
+                    max_restarts=10, backoff_base=2.0, backoff_max=300.0,
+                )
             else:
                 logger.warning("Metering enabled but no MirrorUsagePoint href available - metering task NOT started")
+
+        await self._supervisor.start_all()
 
         # Start DER Control - either subscription-based or polling-based
         if self._enable_subscription:
@@ -680,23 +690,8 @@ class BMSClient:
         
         self._running = False
         
-        # Stop reporting task
-        if self._reporting_task:
-            self._reporting_task.cancel()
-            try:
-                await self._reporting_task
-            except asyncio.CancelledError:
-                pass
-            self._reporting_task = None
-
-        # Stop metering task
-        if self._metering_task:
-            self._metering_task.cancel()
-            try:
-                await self._metering_task
-            except asyncio.CancelledError:
-                pass
-            self._metering_task = None
+        # Stop all supervised background tasks
+        await self._supervisor.stop_all()
 
         # Stop DER Control
         if self._der_client:
@@ -1007,17 +1002,19 @@ class BMSClient:
         while self._running:
             try:
                 await self._report_status()
-                self._ieee2030_5_consecutive_failures = 0
+                self._reporting_consecutive_failures = 0
             except Exception as e:
-                self._ieee2030_5_consecutive_failures += 1
+                self._reporting_consecutive_failures += 1
                 logger.error(
-                    f"Reporting error ({self._ieee2030_5_consecutive_failures}/"
+                    f"Reporting error ({self._reporting_consecutive_failures}/"
                     f"{self._ieee2030_5_failure_threshold}): {e}"
                 )
-                if self._ieee2030_5_consecutive_failures >= self._ieee2030_5_failure_threshold:
+                if self._reporting_consecutive_failures >= self._ieee2030_5_failure_threshold:
                     logger.warning("Failure threshold reached — attempting IEEE 2030.5 reconnection")
                     reconnected = await self._reconnect_ieee2030_5()
-                    if not reconnected:
+                    if reconnected:
+                        self._reporting_consecutive_failures = 0
+                    else:
                         # Wait longer before next cycle in degraded state
                         await asyncio.sleep(300)
                         continue
@@ -1291,17 +1288,19 @@ class BMSClient:
         while self._running:
             try:
                 await self._upload_meter_readings()
-                self._ieee2030_5_consecutive_failures = 0
+                self._metering_consecutive_failures = 0
             except Exception as e:
-                self._ieee2030_5_consecutive_failures += 1
+                self._metering_consecutive_failures += 1
                 logger.error(
-                    f"Metering error ({self._ieee2030_5_consecutive_failures}/"
+                    f"Metering error ({self._metering_consecutive_failures}/"
                     f"{self._ieee2030_5_failure_threshold}): {e}"
                 )
-                if self._ieee2030_5_consecutive_failures >= self._ieee2030_5_failure_threshold:
+                if self._metering_consecutive_failures >= self._ieee2030_5_failure_threshold:
                     logger.warning("Failure threshold reached — attempting IEEE 2030.5 reconnection")
                     reconnected = await self._reconnect_ieee2030_5()
-                    if not reconnected:
+                    if reconnected:
+                        self._metering_consecutive_failures = 0
+                    else:
                         await asyncio.sleep(300)
                         continue
 

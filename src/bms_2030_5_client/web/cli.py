@@ -14,6 +14,7 @@ import sys
 
 from bms_2030_5_client.web.app import create_app
 from bms_2030_5_client.web.log_buffer import log_buffer
+from bms_2030_5_client.logging_setup import setup_logging
 
 
 def parse_args() -> argparse.Namespace:
@@ -77,12 +78,29 @@ def main() -> int:
     """Main entry point."""
     args = parse_args()
     
-    # Setup logging
-    log_level = logging.DEBUG if args.debug else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
+    # Load runtime config to get logging settings
+    log_file = None
+    buffer_size = 500
+    max_bytes = 10 * 1024 * 1024
+    backup_count = 5
+    try:
+        from bms_2030_5_client.runtime_config import RuntimeConfig
+        rt = RuntimeConfig.from_yaml(args.config)
+        log_file = rt.logging.file
+        buffer_size = rt.logging.buffer_size
+        max_bytes = rt.logging.max_bytes
+        backup_count = rt.logging.backup_count
+    except Exception:
+        pass  # Fall back to defaults
+
+    # Unified logging setup (structlog + file + rotation + buffer)
+    setup_logging(
+        level="DEBUG" if args.debug else "INFO",
+        log_file=log_file,
+        max_bytes=max_bytes,
+        backup_count=backup_count,
+        debug=args.debug,
+        buffer_size=buffer_size,
     )
     
     logger = logging.getLogger(__name__)

@@ -29,7 +29,7 @@ from typing import Optional
 from flask import Flask, render_template, request, jsonify, redirect, url_for, Response
 import yaml
 
-from bms_2030_5_client.web.log_buffer import log_buffer, setup_log_capture
+from bms_2030_5_client.web.log_buffer import log_buffer
 from bms_2030_5_client.web.worker_manager import worker_manager, WorkerState
 from bms_2030_5_client.web.notification_server import (
     get_notification_manager,
@@ -85,8 +85,8 @@ def create_app(
     app.config["DEBUG"] = debug
     app.config["CONFIG_PATH"] = config_path
     
-    # Setup log capture
-    setup_log_capture(level=logging.DEBUG if debug else logging.INFO)
+    # Logging is configured by cli.py via setup_logging() before create_app().
+    # No need to call setup_log_capture() here.
     
     # Configure worker manager
     worker_manager.config_path = Path(config_path)
