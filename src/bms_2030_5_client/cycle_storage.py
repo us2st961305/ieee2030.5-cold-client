@@ -147,6 +147,14 @@ class CycleStorage:
             # Atomic rename
             temp_path.replace(self.file_path)
             
+            # Create backup copy for fallback on future load failures
+            try:
+                backup_path = self.file_path.with_suffix('.bak')
+                import shutil
+                shutil.copy2(self.file_path, backup_path)
+            except Exception as backup_err:
+                logger.warning(f"Failed to create backup: {backup_err}")
+            
             logger.debug(
                 f"Saved cycle data: cycles={data.cycle_count}, "
                 f"charge={data.charge_accumulated:.2f}%, "
@@ -179,7 +187,7 @@ class CycleStorage:
                     f"Invalid cycle storage file size: {len(binary_data)} "
                     f"(expected {HEADER_SIZE})"
                 )
-                return None
+                return self._load_backup()
             
             # Unpack data
             (
@@ -196,7 +204,7 @@ class CycleStorage:
             # Validate magic number
             if magic != MAGIC_NUMBER:
                 logger.warning(f"Invalid magic number in cycle storage: {magic}")
-                return None
+                return self._load_backup()
             
             # Validate version
             if version != FORMAT_VERSION:
@@ -204,7 +212,7 @@ class CycleStorage:
                     f"Unsupported cycle storage version: {version} "
                     f"(expected {FORMAT_VERSION})"
                 )
-                return None
+                return self._load_backup()
             
             # Validate checksum
             payload = binary_data[:-4]  # Everything except checksum
@@ -214,7 +222,7 @@ class CycleStorage:
                     f"Cycle storage checksum mismatch: stored={stored_checksum:#x}, "
                     f"calculated={calculated_checksum:#x}"
                 )
-                return None
+                return self._load_backup()
             
             # Convert NaN back to None
             import math
@@ -226,7 +234,7 @@ class CycleStorage:
                 charge_accumulated=charge_accumulated,
                 discharge_accumulated=discharge_accumulated,
                 last_soc=last_soc,
-                timestamp=datetime.fromtimestamp(timestamp),
+                timestamp=datetime.fromtimestamp(timestamp, tz=timezone.utc),
             )
             
             logger.info(
@@ -239,11 +247,68 @@ class CycleStorage:
             
         except struct.error as e:
             logger.error(f"Failed to parse cycle storage file: {e}")
-            return None
+            return self._load_backup()
         except Exception as e:
             logger.error(f"Failed to load cycle tracking data: {e}")
-            return None
+            return self._load_backup()
     
+    def _load_backup(self) -> Optional[CycleTrackingData]:
+        """
+        Try loading from backup file when primary file is corrupted.
+
+        Returns:
+            CycleTrackingData if backup loaded successfully, None otherwise
+        """
+        backup_path = self.file_path.with_suffix('.bak')
+        if not backup_path.exists():
+            logger.warning("No backup file available for recovery")
+            return None
+
+        logger.info(f"Attempting to load from backup: {backup_path}")
+        try:
+            with open(backup_path, 'rb') as f:
+                binary_data = f.read()
+
+            if len(binary_data) != HEADER_SIZE:
+                logger.warning("Backup file also has invalid size")
+                return None
+
+            (
+                magic, version, cycle_count,
+                charge_accumulated, discharge_accumulated, last_soc,
+                timestamp, stored_checksum,
+            ) = struct.unpack(HEADER_FORMAT, binary_data)
+
+            if magic != MAGIC_NUMBER or version != FORMAT_VERSION:
+                logger.warning("Backup file has invalid magic/version")
+                return None
+
+            payload = binary_data[:-4]
+            if stored_checksum != _crc32(payload):
+                logger.warning("Backup file checksum mismatch")
+                return None
+
+            import math
+            if math.isnan(last_soc):
+                last_soc = None
+
+            data = CycleTrackingData(
+                cycle_count=cycle_count,
+                charge_accumulated=charge_accumulated,
+                discharge_accumulated=discharge_accumulated,
+                last_soc=last_soc,
+                timestamp=datetime.fromtimestamp(timestamp, tz=timezone.utc),
+            )
+            logger.info(
+                f"Recovered cycle data from backup: cycles={data.cycle_count}, "
+                f"charge={data.charge_accumulated:.2f}%"
+            )
+            return data
+
+        except Exception as e:
+            logger.error(f"Failed to load backup: {e}")
+            return None
+
     def delete(self) -> bool:
         """
         Delete the storage file.
@@ -281,7 +346,7 @@ class CycleStorage:
         if self.file_path.exists():
             stat = self.file_path.stat()
             info["size"] = stat.st_size
-            info["modified"] = datetime.fromtimestamp(stat.st_mtime).isoformat()
+            info["modified"] = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
         
         return info
 

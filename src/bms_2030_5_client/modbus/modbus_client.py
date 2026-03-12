@@ -298,6 +298,7 @@ class BMSDataCollector:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._callbacks: List[callable] = []
+        self._reconnect_delay: float = 1.0  # Exponential backoff for reconnect
 
     @property
     def latest_snapshot(self) -> Optional[BMSSnapshot]:
@@ -338,11 +339,12 @@ class BMSDataCollector:
         logger.info("BMS data collector stopped")
 
     async def _collection_loop(self) -> None:
-        """Main collection loop."""
+        """Main collection loop with exponential backoff on reconnect."""
         while self._running:
             try:
                 snapshot = await self.client.read_snapshot()
                 self._latest_snapshot = snapshot
+                self._reconnect_delay = 1.0  # Reset on success
                 
                 # Notify callbacks
                 for callback in self._callbacks:
@@ -356,10 +358,15 @@ class BMSDataCollector:
 
             except ModbusClientError as e:
                 logger.error(f"BMS read error: {e}")
-                # Try to reconnect
+                # Reconnect with exponential backoff
                 await self.client.disconnect()
-                await asyncio.sleep(1.0)
-                await self.client.connect()
+                logger.info(f"Modbus reconnecting in {self._reconnect_delay:.1f}s")
+                await asyncio.sleep(self._reconnect_delay)
+                self._reconnect_delay = min(self._reconnect_delay * 2, 60.0)
+                try:
+                    await self.client.connect()
+                except Exception as conn_err:
+                    logger.error(f"Modbus reconnect failed: {conn_err}")
 
             except Exception as e:
                 logger.error(f"Unexpected error in collection loop: {e}")
