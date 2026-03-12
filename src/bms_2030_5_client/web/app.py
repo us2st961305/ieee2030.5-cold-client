@@ -426,7 +426,19 @@ def register_routes(app: Flask) -> None:
             content = request.json.get("content", "")
             
             # Validate YAML syntax
-            yaml.safe_load(content)
+            parsed = yaml.safe_load(content)
+            
+            # Validate config semantics
+            from bms_2030_5_client.runtime_config import (
+                RuntimeConfig, ConfigValidationError,
+            )
+            try:
+                RuntimeConfig.from_dict(parsed if isinstance(parsed, dict) else {})
+            except ConfigValidationError as e:
+                return jsonify({
+                    "success": False,
+                    "error": f"Config validation: {e}",
+                }), 400
             
             # Ensure directory exists
             config_path.parent.mkdir(parents=True, exist_ok=True)

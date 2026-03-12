@@ -21,6 +21,118 @@ from typing import Any, Dict, List, Optional, Union
 
 import yaml
 
+import logging as _logging
+from urllib.parse import urlparse
+
+_config_logger = _logging.getLogger(__name__)
+
+
+# ============================================
+# Validation Helpers
+# ============================================
+
+class ConfigValidationError(ValueError):
+    """Raised when configuration values fail validation."""
+    pass
+
+
+_VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+
+
+def _validate_enum(value: str, enum_cls: type, field_name: str) -> str:
+    """Validate that value is a valid enum member value."""
+    valid = {e.value for e in enum_cls}
+    if value not in valid:
+        raise ConfigValidationError(
+            f"{field_name}: '{value}' is not valid. "
+            f"Must be one of: {sorted(valid)}"
+        )
+    return value
+
+
+def _validate_port(value: Any, field_name: str) -> int:
+    """Validate port number is in range 1-65535."""
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        raise ConfigValidationError(
+            f"{field_name}: '{value}' is not a valid integer"
+        )
+    if not 1 <= port <= 65535:
+        raise ConfigValidationError(
+            f"{field_name}: {port} is out of range (1-65535)"
+        )
+    return port
+
+
+def _validate_url(value: str, field_name: str) -> str:
+    """Validate URL has http/https scheme and a host."""
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https"):
+        raise ConfigValidationError(
+            f"{field_name}: '{value}' must start with http:// or https://"
+        )
+    if not parsed.netloc:
+        raise ConfigValidationError(
+            f"{field_name}: '{value}' is missing a host"
+        )
+    return value
+
+
+def _validate_type(value: Any, expected_type: type, field_name: str) -> Any:
+    """Validate and coerce to expected type."""
+    if value is None:
+        return value
+    try:
+        return expected_type(value)
+    except (TypeError, ValueError):
+        raise ConfigValidationError(
+            f"{field_name}: '{value}' cannot be converted to "
+            f"{expected_type.__name__}"
+        )
+
+
+def _validate_positive(value: Any, field_name: str) -> float:
+    """Validate that a numeric value is positive."""
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        raise ConfigValidationError(
+            f"{field_name}: '{value}' is not a valid number"
+        )
+    if num <= 0:
+        raise ConfigValidationError(
+            f"{field_name}: {num} must be positive"
+        )
+    return num
+
+
+def _validate_log_level(value: str, field_name: str) -> str:
+    """Validate logging level string."""
+    upper = str(value).upper()
+    if upper not in _VALID_LOG_LEVELS:
+        raise ConfigValidationError(
+            f"{field_name}: '{value}' is not valid. "
+            f"Must be one of: {sorted(_VALID_LOG_LEVELS)}"
+        )
+    return upper
+
+
+def _warn_tls_path(path_str: str, field_name: str) -> str:
+    """Log warning if TLS file does not exist (non-blocking)."""
+    if path_str and not Path(path_str).exists():
+        _config_logger.warning("%s: file not found: %s", field_name, path_str)
+    return path_str
+
+
+def _validate_tls_path(path_str: str, field_name: str) -> str:
+    """Raise error if TLS file does not exist."""
+    if path_str and not Path(path_str).exists():
+        raise ConfigValidationError(
+            f"{field_name}: file not found: {path_str}"
+        )
+    return path_str
+
 
 # ============================================
 # Enumerations
@@ -69,12 +181,16 @@ class TLSConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TLSConfig":
         """Create from dictionary."""
-        return cls(
+        instance = cls(
             client_cert_path=data.get("client_cert_path", cls.client_cert_path),
             client_key_path=data.get("client_key_path", cls.client_key_path),
             ca_bundle_path=data.get("ca_bundle_path", cls.ca_bundle_path),
             verify_server=data.get("verify_server", cls.verify_server),
         )
+        _warn_tls_path(instance.client_cert_path, "tls.client_cert_path")
+        _warn_tls_path(instance.client_key_path, "tls.client_key_path")
+        _warn_tls_path(instance.ca_bundle_path, "tls.ca_bundle_path")
+        return instance
 
 
 @dataclass
@@ -91,13 +207,17 @@ class ProfileConfig:
     def from_dict(cls, data: Dict[str, Any]) -> "ProfileConfig":
         """Create from dictionary."""
         tls_data = data.get("tls", {})
+        server_base_url = data.get("server_base_url", cls.server_base_url)
+        content_type = data.get("content_type_preference", ContentType.SEP_XML.value)
+        _validate_url(server_base_url, "profile.server_base_url")
+        _validate_enum(content_type, ContentType, "profile.content_type_preference")
         return cls(
             name=data.get("name", "default"),
-            server_base_url=data.get("server_base_url", cls.server_base_url),
+            server_base_url=server_base_url,
             tls=TLSConfig.from_dict(tls_data) if tls_data else TLSConfig(),
-            content_type_preference=data.get("content_type_preference", ContentType.SEP_XML.value),
+            content_type_preference=content_type,
             device_id=data.get("device_id", cls.device_id),
-            pin=data.get("pin", cls.pin),
+            pin=_validate_type(data.get("pin", cls.pin), int, "profile.pin"),
         )
 
 
@@ -182,14 +302,16 @@ class ModbusConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ModbusConfig":
         """Create from dictionary."""
+        mode = data.get("mode", cls.mode)
+        _validate_enum(mode, ModbusMode, "modbus.mode")
         return cls(
-            mode=data.get("mode", cls.mode),
+            mode=mode,
             host=data.get("host", cls.host),
-            port=data.get("port", cls.port),
-            unit_id=data.get("unit_id", cls.unit_id),
-            timeout=data.get("timeout", cls.timeout),
+            port=_validate_port(data.get("port", cls.port), "modbus.port"),
+            unit_id=_validate_type(data.get("unit_id", cls.unit_id), int, "modbus.unit_id"),
+            timeout=_validate_positive(data.get("timeout", cls.timeout), "modbus.timeout"),
             defaults=ModbusDefaults.from_dict(data.get("defaults", {})),
-            rack_count=data.get("rack_count", cls.rack_count),
+            rack_count=_validate_type(data.get("rack_count", cls.rack_count), int, "modbus.rack_count"),
             registers=RegistersConfig.from_dict(data.get("registers", {})),
         )
 
@@ -208,8 +330,10 @@ class ParseConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ParseConfig":
         """Create from dictionary."""
+        fmt = data.get("format", cls.format)
+        _validate_enum(fmt, ParseFormat, "parse.format")
         return cls(
-            format=data.get("format", cls.format),
+            format=fmt,
             xpath=data.get("xpath"),
             field_path=data.get("field_path"),
         )
@@ -254,11 +378,13 @@ class ModbusWriteConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ModbusWriteConfig":
         """Create from dictionary."""
+        datatype = data.get("datatype", cls.datatype)
+        _validate_enum(datatype, ModbusDataType, "modbus_write.datatype")
         return cls(
-            address=data.get("address", cls.address),
-            datatype=data.get("datatype", cls.datatype),
-            scale=data.get("scale", cls.scale),
-            offset=data.get("offset", cls.offset),
+            address=_validate_type(data.get("address", cls.address), int, "modbus_write.address"),
+            datatype=datatype,
+            scale=_validate_type(data.get("scale", cls.scale), float, "modbus_write.scale"),
+            offset=_validate_type(data.get("offset", cls.offset), float, "modbus_write.offset"),
         )
 
     def convert_value(self, value: float) -> int:
@@ -374,18 +500,33 @@ class NotificationServerConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "NotificationServerConfig":
         """Create from dictionary."""
-        return cls(
-            enabled=data.get("enabled", cls.enabled),
+        enabled = data.get("enabled", cls.enabled)
+        tls_enabled = data.get("tls_server_enabled", cls.tls_server_enabled)
+        cert_path = data.get("tls_server_cert_path", cls.tls_server_cert_path)
+        key_path = data.get("tls_server_key_path", cls.tls_server_key_path)
+        ca_path = data.get("tls_client_ca_path", cls.tls_client_ca_path)
+        instance = cls(
+            enabled=enabled,
             listen_host=data.get("listen_host", cls.listen_host),
-            listen_port=data.get("listen_port", cls.listen_port),
-            tls_server_enabled=data.get("tls_server_enabled", cls.tls_server_enabled),
-            tls_server_cert_path=data.get("tls_server_cert_path", cls.tls_server_cert_path),
-            tls_server_key_path=data.get("tls_server_key_path", cls.tls_server_key_path),
+            listen_port=_validate_port(
+                data.get("listen_port", cls.listen_port),
+                "notification_server.listen_port",
+            ),
+            tls_server_enabled=tls_enabled,
+            tls_server_cert_path=cert_path,
+            tls_server_key_path=key_path,
             tls_require_client_cert=data.get("tls_require_client_cert", cls.tls_require_client_cert),
-            tls_client_ca_path=data.get("tls_client_ca_path", cls.tls_client_ca_path),
+            tls_client_ca_path=ca_path,
             endpoint_path=data.get("endpoint_path", cls.endpoint_path),
             public_uri=data.get("public_uri", cls.public_uri),
         )
+        if enabled and tls_enabled:
+            _warn_tls_path(cert_path, "notification_server.tls_server_cert_path")
+            _warn_tls_path(key_path, "notification_server.tls_server_key_path")
+        else:
+            _warn_tls_path(cert_path, "notification_server.tls_server_cert_path")
+            _warn_tls_path(key_path, "notification_server.tls_server_key_path")
+        return instance
 
 
 # ============================================
@@ -412,9 +553,9 @@ class PCSModbusConfig:
         """Create from dictionary."""
         return cls(
             host=data.get("host", cls.host),
-            port=data.get("port", cls.port),
-            unit_id=data.get("unit_id", cls.unit_id),
-            timeout=data.get("timeout", cls.timeout),
+            port=_validate_port(data.get("port", cls.port), "pcs_modbus.port"),
+            unit_id=_validate_type(data.get("unit_id", cls.unit_id), int, "pcs_modbus.unit_id"),
+            timeout=_validate_positive(data.get("timeout", cls.timeout), "pcs_modbus.timeout"),
         )
 
 
@@ -507,12 +648,17 @@ class PowerControlConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PowerControlConfig":
         """Create from dictionary."""
+        mode = data.get("mode", cls.mode)
+        _validate_enum(mode, PowerControlMode, "power_control.mode")
         return cls(
-            mode=data.get("mode", cls.mode),
+            mode=mode,
             pcs_modbus=PCSModbusConfig.from_dict(data.get("pcs_modbus", {})),
             registers=PCSRegistersConfig.from_dict(data.get("registers", {})),
             datatype=data.get("datatype", cls.datatype),
-            power_scale_factor=data.get("power_scale_factor", cls.power_scale_factor),
+            power_scale_factor=_validate_type(
+                data.get("power_scale_factor", cls.power_scale_factor),
+                float, "power_control.power_scale_factor",
+            ),
             use_32bit=data.get("use_32bit", cls.use_32bit),
             verify_after_write=data.get("verify_after_write", cls.verify_after_write),
             limits=PowerLimitsConfig.from_dict(data.get("limits", {})),
@@ -537,13 +683,15 @@ class LoggingConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "LoggingConfig":
         """Create from dictionary."""
+        level = data.get("level", cls.level)
+        level = _validate_log_level(level, "logging.level")
         return cls(
-            level=data.get("level", cls.level),
+            level=level,
             format=data.get("format", cls.format),
             file=data.get("file"),
-            buffer_size=data.get("buffer_size", cls.buffer_size),
-            max_bytes=data.get("max_bytes", cls.max_bytes),
-            backup_count=data.get("backup_count", cls.backup_count),
+            buffer_size=_validate_type(data.get("buffer_size", cls.buffer_size), int, "logging.buffer_size"),
+            max_bytes=_validate_type(data.get("max_bytes", cls.max_bytes), int, "logging.max_bytes"),
+            backup_count=_validate_type(data.get("backup_count", cls.backup_count), int, "logging.backup_count"),
         )
 
 
