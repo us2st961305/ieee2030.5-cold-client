@@ -756,6 +756,12 @@ class LoggingConfig:
 # Main Runtime Configuration
 # ============================================
 
+_KNOWN_TOP_LEVEL_KEYS = {
+    "profiles", "modbus", "poll_targets", "subscriptions",
+    "notification_server", "power_control", "logging",
+}
+
+
 @dataclass
 class RuntimeConfig:
     """
@@ -813,7 +819,21 @@ class RuntimeConfig:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "RuntimeConfig":
-        """Create from dictionary."""
+        """Create from dictionary.
+
+        Unknown top-level keys are logged as warnings and collected
+        in the returned instance's ``config_warnings`` attribute.
+        """
+        warnings: List[str] = []
+        unknown = set(data.keys()) - _KNOWN_TOP_LEVEL_KEYS
+        if unknown:
+            msg = (
+                f"Unknown top-level config keys (ignored): "
+                f"{sorted(unknown)}"
+            )
+            _config_logger.warning(msg)
+            warnings.append(msg)
+
         profiles = [
             ProfileConfig.from_dict(p) for p in data.get("profiles", [])
         ]
@@ -826,7 +846,7 @@ class RuntimeConfig:
             SubscriptionConfig.from_dict(s) for s in data.get("subscriptions", [])
         ]
 
-        return cls(
+        instance = cls(
             profiles=profiles,
             modbus=ModbusConfig.from_dict(data.get("modbus", {})),
             poll_targets=poll_targets,
@@ -837,6 +857,8 @@ class RuntimeConfig:
             power_control=PowerControlConfig.from_dict(data.get("power_control", {})),
             logging=LoggingConfig.from_dict(data.get("logging", {})),
         )
+        instance.config_warnings = warnings
+        return instance
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""

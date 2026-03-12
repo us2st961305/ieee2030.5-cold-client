@@ -483,3 +483,42 @@ class TestDefaultValues:
         assert cfg.modbus.port == 502
         assert cfg.power_control.mode == "simulation"
         assert cfg.logging.level == "INFO"
+
+
+# ============================================
+# Unknown Key Detection
+# ============================================
+
+class TestUnknownKeyDetection:
+    """Verify that unknown top-level keys produce warnings."""
+
+    def test_no_warnings_for_valid_keys(self):
+        cfg = RuntimeConfig.from_dict({"modbus": {}, "logging": {}})
+        assert cfg.config_warnings == []
+
+    def test_unknown_key_produces_warning(self):
+        cfg = RuntimeConfig.from_dict({"modbus": {}, "typo_key": "value"})
+        assert len(cfg.config_warnings) == 1
+        assert "typo_key" in cfg.config_warnings[0]
+
+    def test_multiple_unknown_keys(self):
+        cfg = RuntimeConfig.from_dict({
+            "modbus": {},
+            "foo": 1,
+            "bar": 2,
+        })
+        assert len(cfg.config_warnings) == 1
+        assert "foo" in cfg.config_warnings[0]
+        assert "bar" in cfg.config_warnings[0]
+
+    def test_unknown_key_does_not_block_loading(self):
+        cfg = RuntimeConfig.from_dict({
+            "unknown_section": {"nested": True},
+            "modbus": {"port": 1502},
+        })
+        assert cfg.modbus.port == 1502
+        assert len(cfg.config_warnings) == 1
+
+    def test_empty_dict_no_warnings(self):
+        cfg = RuntimeConfig.from_dict({})
+        assert cfg.config_warnings == []

@@ -396,7 +396,23 @@ def register_routes(app: Flask) -> None:
             content = request.json.get("content", "")
             
             # Validate YAML syntax
-            yaml.safe_load(content)
+            parsed = yaml.safe_load(content)
+            
+            # Validate config semantics
+            from bms_2030_5_client.runtime_config import (
+                RuntimeConfig, ConfigValidationError,
+            )
+            warnings: list[str] = []
+            try:
+                cfg = RuntimeConfig.from_dict(
+                    parsed if isinstance(parsed, dict) else {}
+                )
+                warnings = getattr(cfg, "config_warnings", [])
+            except ConfigValidationError as e:
+                return jsonify({
+                    "success": False,
+                    "error": f"Config validation: {e}",
+                }), 400
             
             # Ensure directory exists
             config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -410,7 +426,10 @@ def register_routes(app: Flask) -> None:
                 logger_name="web.config",
             )
             
-            return jsonify({"success": True, "message": "Config saved"})
+            resp = {"success": True, "message": "Config saved"}
+            if warnings:
+                resp["warnings"] = warnings
+            return jsonify(resp)
             
         except yaml.YAMLError as e:
             return jsonify({"success": False, "error": f"Invalid YAML: {e}"}), 400
@@ -432,8 +451,12 @@ def register_routes(app: Flask) -> None:
             from bms_2030_5_client.runtime_config import (
                 RuntimeConfig, ConfigValidationError,
             )
+            warnings: list[str] = []
             try:
-                RuntimeConfig.from_dict(parsed if isinstance(parsed, dict) else {})
+                cfg = RuntimeConfig.from_dict(
+                    parsed if isinstance(parsed, dict) else {}
+                )
+                warnings = getattr(cfg, "config_warnings", [])
             except ConfigValidationError as e:
                 return jsonify({
                     "success": False,
@@ -455,11 +478,14 @@ def register_routes(app: Flask) -> None:
             # Reload worker
             worker_manager.reload()
             
-            return jsonify({
+            resp = {
                 "success": True,
                 "message": "Config saved and applied",
                 "status": worker_manager.status.to_dict(),
-            })
+            }
+            if warnings:
+                resp["warnings"] = warnings
+            return jsonify(resp)
             
         except yaml.YAMLError as e:
             return jsonify({"success": False, "error": f"Invalid YAML: {e}"}), 400
