@@ -23,6 +23,13 @@ BMS ↔ EMS communication using IEEE 2030.5. 對話語言一律使用**繁體中
 - ✅ 必須使用 `git add <file1> <file2> ...` 明確指定
 - ✅ Commit 前必須 `git diff --cached --stat` 確認暫存區只有自己的改動
 
+### 工作流程安全
+
+- ❌ **絕對禁止**：收到實作任務後直接寫程式碼，跳過「實作前 Checklist」
+- ❌ **絕對禁止**：回報任務完成時未走完「實作後 Checklist」
+- ✅ 必須依序完成 Checklist 每一步，不可跳過任何一項
+- ✅ 即使改動只涉及一個檔案、一個函式，仍須走完整流程
+
 ---
 
 ## 📋 工作流程 Checklist
