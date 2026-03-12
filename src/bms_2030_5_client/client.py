@@ -171,6 +171,10 @@ class BMSClient:
 
         # Persistent HTTP client for Supabase reporting (created on start, closed on stop)
         self._supabase_client: Optional[httpx.AsyncClient] = None
+
+        # IEEE 2030.5 reconnection tracking
+        self._ieee2030_5_consecutive_failures: int = 0
+        self._ieee2030_5_failure_threshold: int = 3  # trigger reconnect after N failures
     
     def _init_cycle_tracking(self) -> None:
         """
@@ -307,6 +311,48 @@ class BMSClient:
         except Exception as e:
             logger.warning(f"Failed to initialize database: {e}")
             self._db = None
+
+    async def _reconnect_ieee2030_5(self) -> bool:
+        """
+        Reconnect to IEEE 2030.5 server with exponential backoff.
+
+        Attempts up to 10 reconnections with delays: 2s, 4s, 8s, ... 120s max.
+
+        Returns:
+            True if reconnection successful
+        """
+        max_attempts = 10
+        base_delay = 2.0
+        max_delay = 120.0
+
+        for attempt in range(1, max_attempts + 1):
+            if not self._running:
+                return False
+
+            delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+            logger.warning(
+                f"IEEE 2030.5 reconnect attempt {attempt}/{max_attempts} "
+                f"(next retry in {delay:.0f}s)"
+            )
+            try:
+                await self.ieee2030_5_client.disconnect()
+                success = await self.ieee2030_5_client.connect()
+                if success:
+                    logger.info(
+                        f"IEEE 2030.5 reconnection successful after {attempt} attempt(s)"
+                    )
+                    self._ieee2030_5_consecutive_failures = 0
+                    return True
+            except Exception as e:
+                logger.error(f"Reconnect attempt {attempt} failed: {e}")
+
+            await asyncio.sleep(delay)
+
+        logger.critical(
+            "IEEE 2030.5 reconnection failed after max attempts — "
+            "entering degraded state, will retry periodically"
+        )
+        return False
     
     def _load_cached_resources(self) -> bool:
         """
@@ -964,14 +1010,27 @@ class BMSClient:
         Main reporting loop.
         
         Periodically sends DER status/availability to IEEE 2030.5 server.
+        Triggers reconnection after consecutive failures exceed threshold.
         """
         poll_rate = self.config.ieee2030_5.poll_rate
         
         while self._running:
             try:
                 await self._report_status()
+                self._ieee2030_5_consecutive_failures = 0
             except Exception as e:
-                logger.error(f"Reporting error: {e}")
+                self._ieee2030_5_consecutive_failures += 1
+                logger.error(
+                    f"Reporting error ({self._ieee2030_5_consecutive_failures}/"
+                    f"{self._ieee2030_5_failure_threshold}): {e}"
+                )
+                if self._ieee2030_5_consecutive_failures >= self._ieee2030_5_failure_threshold:
+                    logger.warning("Failure threshold reached — attempting IEEE 2030.5 reconnection")
+                    reconnected = await self._reconnect_ieee2030_5()
+                    if not reconnected:
+                        # Wait longer before next cycle in degraded state
+                        await asyncio.sleep(300)
+                        continue
 
             await asyncio.sleep(poll_rate)
 
@@ -1242,8 +1301,19 @@ class BMSClient:
         while self._running:
             try:
                 await self._upload_meter_readings()
+                self._ieee2030_5_consecutive_failures = 0
             except Exception as e:
-                logger.error(f"Metering error: {e}")
+                self._ieee2030_5_consecutive_failures += 1
+                logger.error(
+                    f"Metering error ({self._ieee2030_5_consecutive_failures}/"
+                    f"{self._ieee2030_5_failure_threshold}): {e}"
+                )
+                if self._ieee2030_5_consecutive_failures >= self._ieee2030_5_failure_threshold:
+                    logger.warning("Failure threshold reached — attempting IEEE 2030.5 reconnection")
+                    reconnected = await self._reconnect_ieee2030_5()
+                    if not reconnected:
+                        await asyncio.sleep(300)
+                        continue
 
             await asyncio.sleep(poll_rate)
 

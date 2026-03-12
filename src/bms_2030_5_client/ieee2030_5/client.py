@@ -100,6 +100,11 @@ class IEEE2030_5Client:
         self._lfdi: Optional[str] = None
         self._sfdi: Optional[int] = None
 
+    @property
+    def is_connected(self) -> bool:
+        """Check if client has an active connection to server."""
+        return self._client is not None
+
     @classmethod
     def from_config(cls, config: Config) -> "IEEE2030_5Client":
         """Create client from configuration."""
