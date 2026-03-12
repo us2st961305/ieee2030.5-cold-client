@@ -17,6 +17,7 @@ Power Control Safety Module (功率控制安全模組)
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import sys
@@ -237,7 +238,9 @@ class EmergencyStop:
         需要有效的授權 token
         """
         expected_token = os.getenv("POWER_CONTROL_SAFETY_TOKEN")
-        if not expected_token or authorization_token != expected_token:
+        if not expected_token or not hmac.compare_digest(
+            authorization_token.encode(), expected_token.encode()
+        ):
             power_audit_logger.warning("Failed emergency stop reset: invalid token")
             return False
         
