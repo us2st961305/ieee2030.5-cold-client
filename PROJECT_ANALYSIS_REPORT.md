@@ -28,7 +28,6 @@
 - **資料庫**: SQLite（IEEE 2030.5 資源持久化）
 - **排程**: asyncio 原生（背景任務、定期輪詢）
 - **配置**: PyYAML
-- **部署**: Docker + docker-compose
 
 ---
 
