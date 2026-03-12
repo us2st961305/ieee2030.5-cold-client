@@ -98,7 +98,7 @@ def write_log(args):
         "summary": args.summary,
         "files_changed": args.files,
         "tags": args.tags,
-        "github_repo": "",
+        "github_repo": "us2st/ieee2030.5-cold-client",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "code_anchors": args.anchors or "",
         "dependencies_affected": args.deps or "",
@@ -121,7 +121,7 @@ def main():
     parser.add_argument("--deps", default="", help="Comma-separated affected dependencies")
     parser.add_argument("--rationale", default="", help="Decision rationale")
     parser.add_argument("--risk", default="", help="Risk notes")
-    parser.add_argument("--type", default="feature", choices=["feature", "bugfix", "refactor", "config"], help="Change type")
+    parser.add_argument("--type", default="feature", choices=["feature", "bugfix", "refactor", "config", "fix"], help="Change type")
     parser.add_argument("--details", default="", help="Detailed description")
     args = parser.parse_args()
     write_log(args)

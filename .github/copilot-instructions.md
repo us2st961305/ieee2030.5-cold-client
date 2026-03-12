@@ -69,6 +69,7 @@ BMS ↔ EMS communication using IEEE 2030.5. 對話語言一律使用**繁體中
       --files "file1.py, file2.py" \
       --tags "tag1, tag2" \
       --anchors "file.py::Class::method" \
+      --deps "module_a.py, module_b.py" \
       --rationale "決策原因" \
       --risk "已知風險" \
       --type feature

@@ -104,7 +104,7 @@ Tags: tag1, tag2
 | `dependencies_affected` | 受影響模組 | `module_a.py, module_b.py` |
 | `decision_rationale` | 決策原因 | `為什麼選擇這個做法` |
 | `risk_notes` | 風險紀錄 | `已知風險或踩坑經驗` |
-| `change_type` | 變更類型 | `feature` / `bugfix` / `refactor` / `config` |
+| `change_type` | 變更類型 | `feature` / `bugfix` / `refactor` / `config` / `fix` |
 
 ### code_anchors 格式
 - Python: `file.py::ClassName::method_name` 或 `file.py::function_name`
