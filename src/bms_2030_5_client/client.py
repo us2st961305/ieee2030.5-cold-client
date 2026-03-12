@@ -616,9 +616,7 @@ class BMSClient:
                             logger.warning("Could not get or create DER resource")
                         
                 except Exception as e:
-                    logger.warning(f"Registration/lookup failed: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    logger.warning(f"Registration/lookup failed: {e}", exc_info=True)
 
         # Register MirrorUsagePoint (meter) for metering data
         if self.enable_metering:
@@ -649,9 +647,7 @@ class BMSClient:
                 )
                 logger.info("Device information updated successfully")
             except Exception as e:
-                logger.warning(f"Failed to update device information: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.warning(f"Failed to update device information: {e}", exc_info=True)
 
         # Start data collection
         await self.data_collector.start()
@@ -815,9 +811,7 @@ class BMSClient:
                     )
                     
                 except Exception as e:
-                    logger.error(f"Failed to initialize PCS writer: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    logger.error(f"Failed to initialize PCS writer: {e}", exc_info=True)
             
             return controller
         
@@ -871,9 +865,7 @@ class BMSClient:
             )
             
         except Exception as e:
-            logger.error(f"Failed to start DER Control: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Failed to start DER Control: {e}", exc_info=True)
             # Don't fail the entire client if DER control fails
             self._der_client = None
             self._power_controller = None
@@ -974,9 +966,7 @@ class BMSClient:
             )
             
         except Exception as e:
-            logger.error(f"Failed to start subscription control: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Failed to start subscription control: {e}", exc_info=True)
             # Clean up partial initialization
             await self._stop_subscription_control()
 
