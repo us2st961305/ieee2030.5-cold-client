@@ -38,6 +38,7 @@ from bms_2030_5_client.models import (
 )
 from bms_2030_5_client.ieee2030_5.xml_utils import (
     dataclass_to_xml,
+    sanitize_xml_for_log,
     xml_to_dataclass,
 )
 
@@ -397,11 +398,11 @@ class IEEE2030_5Client:
         
         try:
             xml_data = dataclass_to_xml(data)
-            logger.debug(f"POST {path} Request:\n{xml_data}")
+            logger.debug(f"POST {path} Request:\n{sanitize_xml_for_log(xml_data)}")
             response = await self._client.post(path, content=xml_data)
             response_time_ms = (time.time() - start_time) * 1000
             logger.debug(f"POST {path} Response Status: {response.status_code}")
-            logger.debug(f"POST {path} Response Body:\n{response.text}")
+            logger.debug(f"POST {path} Response Body:\n{sanitize_xml_for_log(response.text)}")
             response.raise_for_status()
             
             # 記錄請求
@@ -425,9 +426,7 @@ class IEEE2030_5Client:
             
         except httpx.HTTPStatusError as e:
             response_time_ms = (time.time() - start_time) * 1000
-            logger.error(f"POST {path} Request:\n{xml_data}")
-            logger.error(f"POST {path} Response Status: {e.response.status_code}")
-            logger.error(f"POST {path} Response Body:\n{e.response.text}")
+            logger.error(f"POST {path} failed: HTTP {e.response.status_code}")
             self._log_http_request(
                 method="POST",
                 path=path,
@@ -463,7 +462,7 @@ class IEEE2030_5Client:
         
         try:
             xml_data = dataclass_to_xml(data)
-            logger.debug(f"PUT {path} XML:\n{xml_data}")
+            logger.debug(f"PUT {path} XML:\n{sanitize_xml_for_log(xml_data)}")
             response = await self._client.put(path, content=xml_data)
             response_time_ms = (time.time() - start_time) * 1000
             response.raise_for_status()
@@ -482,9 +481,7 @@ class IEEE2030_5Client:
             
         except httpx.HTTPStatusError as e:
             response_time_ms = (time.time() - start_time) * 1000
-            logger.error(f"PUT error: {e.response.status_code}")
-            logger.error(f"PUT request XML: {xml_data}")
-            logger.error(f"Response body: {e.response.text}")
+            logger.error(f"PUT {path} failed: HTTP {e.response.status_code}")
             self._log_http_request(
                 method="PUT",
                 path=path,

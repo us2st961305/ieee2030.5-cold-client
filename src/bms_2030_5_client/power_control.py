@@ -20,6 +20,7 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -29,6 +30,10 @@ from uuid import uuid4
 
 # 專用的功率控制審計日誌
 power_audit_logger = logging.getLogger("power_control.audit")
+
+# Regex to strip control characters and ANSI escape codes for log injection prevention
+# ANSI escape pattern must come first to match full sequence before char class consumes \x1b
+_LOG_SANITIZE_RE = re.compile(r"\x1b\[[0-9;]*m|[\x00-\x08\x0a-\x1f\x7f]")
 power_audit_logger.setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
@@ -212,8 +217,9 @@ class EmergencyStop:
         cls._stopped = True
         cls._reason = reason
         cls._timestamp = datetime.now(timezone.utc)
+        safe_reason = _LOG_SANITIZE_RE.sub("", reason)[:200]
         power_audit_logger.critical(
-            f"EMERGENCY_STOP | reason={reason} | timestamp={cls._timestamp.isoformat()}"
+            f"EMERGENCY_STOP | reason={safe_reason} | timestamp={cls._timestamp.isoformat()}"
         )
     
     @classmethod
@@ -244,8 +250,9 @@ class EmergencyStop:
             power_audit_logger.warning("Failed emergency stop reset: invalid token")
             return False
         
+        safe_reason = _LOG_SANITIZE_RE.sub("", cls._reason or "")[:200]
         power_audit_logger.warning(
-            f"EMERGENCY_STOP_RESET | previous_reason={cls._reason}"
+            f"EMERGENCY_STOP_RESET | previous_reason={safe_reason}"
         )
         cls._stopped = False
         cls._reason = None

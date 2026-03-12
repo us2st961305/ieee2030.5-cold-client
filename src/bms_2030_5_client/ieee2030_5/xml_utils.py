@@ -3,6 +3,7 @@ XML serialization utilities for IEEE 2030.5.
 """
 
 import logging
+import re
 import xml.etree.ElementTree as ET
 from defusedxml.ElementTree import fromstring as _safe_fromstring
 from enum import Enum
@@ -10,6 +11,24 @@ from typing import Any, Type, TypeVar, get_type_hints, get_origin, get_args
 from dataclasses import fields, is_dataclass
 
 logger = logging.getLogger(__name__)
+
+# Regex to match sensitive XML elements and redact their content
+_SENSITIVE_XML_RE = re.compile(
+    r"(<(?:sFDI|LFDI|lfdi|sfdi|pin|registrationPIN|PIN)"
+    r"(?:\s[^>]*)?>)[^<]*(</)",
+    re.IGNORECASE,
+)
+_XML_LOG_MAX_LEN = 500
+
+
+def sanitize_xml_for_log(xml_str: str | None) -> str:
+    """Redact sensitive fields from XML before logging."""
+    if not xml_str:
+        return "<empty>"
+    redacted = _SENSITIVE_XML_RE.sub(r"\1***REDACTED***\2", xml_str)
+    if len(redacted) > _XML_LOG_MAX_LEN:
+        return redacted[:_XML_LOG_MAX_LEN] + "... (truncated)"
+    return redacted
 
 T = TypeVar("T")
 
@@ -155,7 +174,7 @@ def xml_to_dataclass(xml_str: str, cls: Type[T]) -> T:
         Parsed dataclass instance
     """
     logger.debug(f"Parsing XML to {cls.__name__}")
-    logger.debug(f"XML content:\n{xml_str}")
+    logger.debug(f"XML content:\n{sanitize_xml_for_log(xml_str)}")
     
     try:
         root = _safe_fromstring(xml_str)
