@@ -118,6 +118,38 @@ def _validate_log_level(value: str, field_name: str) -> str:
     return upper
 
 
+def _validate_range(
+    value: Any, field_name: str, *, expected_type: type = int,
+    ge: float | None = None, gt: float | None = None,
+    le: float | None = None, lt: float | None = None,
+) -> int | float:
+    """Validate and coerce a numeric value to expected_type within bounds."""
+    try:
+        num = expected_type(value)
+    except (TypeError, ValueError):
+        raise ConfigValidationError(
+            f"{field_name}: '{value}' cannot be converted to "
+            f"{expected_type.__name__}"
+        )
+    if ge is not None and num < ge:
+        raise ConfigValidationError(
+            f"{field_name}: {num} must be >= {ge}"
+        )
+    if gt is not None and num <= gt:
+        raise ConfigValidationError(
+            f"{field_name}: {num} must be > {gt}"
+        )
+    if le is not None and num > le:
+        raise ConfigValidationError(
+            f"{field_name}: {num} must be <= {le}"
+        )
+    if lt is not None and num >= lt:
+        raise ConfigValidationError(
+            f"{field_name}: {num} must be < {lt}"
+        )
+    return num
+
+
 def _warn_tls_path(path_str: str, field_name: str) -> str:
     """Log warning if TLS file does not exist (non-blocking)."""
     if path_str and not Path(path_str).exists():
@@ -584,6 +616,9 @@ class PCSRegistersConfig:
         )
 
 
+_MAX_POWER_W = 10_000_000  # 10 MW — sanity guard for any equipment type
+
+
 @dataclass
 class PowerLimitsConfig:
     """Power safety limits (enforced in ALL modes)."""
@@ -596,12 +631,34 @@ class PowerLimitsConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PowerLimitsConfig":
         """Create from dictionary."""
+        min_soc = _validate_range(
+            data.get("min_soc_percent", cls.min_soc_percent),
+            "limits.min_soc_percent", expected_type=float, ge=0.0, le=100.0,
+        )
+        max_soc = _validate_range(
+            data.get("max_soc_percent", cls.max_soc_percent),
+            "limits.max_soc_percent", expected_type=float, ge=0.0, le=100.0,
+        )
+        if min_soc >= max_soc:
+            raise ConfigValidationError(
+                f"limits.min_soc_percent ({min_soc}) must be less than "
+                f"limits.max_soc_percent ({max_soc})"
+            )
         return cls(
-            max_charge_w=data.get("max_charge_w", cls.max_charge_w),
-            max_discharge_w=data.get("max_discharge_w", cls.max_discharge_w),
-            ramp_rate_w_per_s=data.get("ramp_rate_w_per_s", cls.ramp_rate_w_per_s),
-            min_soc_percent=data.get("min_soc_percent", cls.min_soc_percent),
-            max_soc_percent=data.get("max_soc_percent", cls.max_soc_percent),
+            max_charge_w=_validate_range(
+                data.get("max_charge_w", cls.max_charge_w),
+                "limits.max_charge_w", ge=0, le=_MAX_POWER_W,
+            ),
+            max_discharge_w=_validate_range(
+                data.get("max_discharge_w", cls.max_discharge_w),
+                "limits.max_discharge_w", ge=0, le=_MAX_POWER_W,
+            ),
+            ramp_rate_w_per_s=_validate_range(
+                data.get("ramp_rate_w_per_s", cls.ramp_rate_w_per_s),
+                "limits.ramp_rate_w_per_s", ge=1, le=_MAX_POWER_W,
+            ),
+            min_soc_percent=min_soc,
+            max_soc_percent=max_soc,
         )
 
 

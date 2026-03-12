@@ -21,6 +21,7 @@ from bms_2030_5_client.runtime_config import (
     ParseFormat,
     PowerControlConfig,
     PowerControlMode,
+    PowerLimitsConfig,
     ProfileConfig,
     RuntimeConfig,
     TLSConfig,
@@ -316,6 +317,139 @@ class TestTLSPathValidation:
             "tls_server_key_path": str(key),
         })
         assert cfg.enabled is True
+
+
+# ============================================
+# Power Limits Validation
+# ============================================
+
+class TestPowerLimitsValidation:
+    """Verify safety boundary checks for power limits."""
+
+    # --- max_charge_w ---
+    def test_max_charge_w_valid(self):
+        cfg = PowerLimitsConfig.from_dict({"max_charge_w": 5000})
+        assert cfg.max_charge_w == 5000
+
+    def test_max_charge_w_zero(self):
+        cfg = PowerLimitsConfig.from_dict({"max_charge_w": 0})
+        assert cfg.max_charge_w == 0
+
+    def test_max_charge_w_negative(self):
+        with pytest.raises(ConfigValidationError, match="max_charge_w"):
+            PowerLimitsConfig.from_dict({"max_charge_w": -1})
+
+    def test_max_charge_w_exceeds_10mw(self):
+        with pytest.raises(ConfigValidationError, match="max_charge_w"):
+            PowerLimitsConfig.from_dict({"max_charge_w": 10_000_001})
+
+    def test_max_charge_w_at_10mw(self):
+        cfg = PowerLimitsConfig.from_dict({"max_charge_w": 10_000_000})
+        assert cfg.max_charge_w == 10_000_000
+
+    # --- max_discharge_w ---
+    def test_max_discharge_w_valid(self):
+        cfg = PowerLimitsConfig.from_dict({"max_discharge_w": 100_000})
+        assert cfg.max_discharge_w == 100_000
+
+    def test_max_discharge_w_negative(self):
+        with pytest.raises(ConfigValidationError, match="max_discharge_w"):
+            PowerLimitsConfig.from_dict({"max_discharge_w": -500})
+
+    def test_max_discharge_w_exceeds_10mw(self):
+        with pytest.raises(ConfigValidationError, match="max_discharge_w"):
+            PowerLimitsConfig.from_dict({"max_discharge_w": 99_999_999})
+
+    # --- ramp_rate_w_per_s ---
+    def test_ramp_rate_valid(self):
+        cfg = PowerLimitsConfig.from_dict({"ramp_rate_w_per_s": 1000})
+        assert cfg.ramp_rate_w_per_s == 1000
+
+    def test_ramp_rate_min_1(self):
+        cfg = PowerLimitsConfig.from_dict({"ramp_rate_w_per_s": 1})
+        assert cfg.ramp_rate_w_per_s == 1
+
+    def test_ramp_rate_zero(self):
+        with pytest.raises(ConfigValidationError, match="ramp_rate_w_per_s"):
+            PowerLimitsConfig.from_dict({"ramp_rate_w_per_s": 0})
+
+    def test_ramp_rate_negative(self):
+        with pytest.raises(ConfigValidationError, match="ramp_rate_w_per_s"):
+            PowerLimitsConfig.from_dict({"ramp_rate_w_per_s": -100})
+
+    def test_ramp_rate_exceeds_10mw(self):
+        with pytest.raises(ConfigValidationError, match="ramp_rate_w_per_s"):
+            PowerLimitsConfig.from_dict({"ramp_rate_w_per_s": 10_000_001})
+
+    # --- min_soc_percent ---
+    def test_min_soc_valid(self):
+        cfg = PowerLimitsConfig.from_dict({"min_soc_percent": 20.0})
+        assert cfg.min_soc_percent == 20.0
+
+    def test_min_soc_zero(self):
+        cfg = PowerLimitsConfig.from_dict({"min_soc_percent": 0.0})
+        assert cfg.min_soc_percent == 0.0
+
+    def test_min_soc_negative(self):
+        with pytest.raises(ConfigValidationError, match="min_soc_percent"):
+            PowerLimitsConfig.from_dict({"min_soc_percent": -1.0})
+
+    def test_min_soc_over_100(self):
+        with pytest.raises(ConfigValidationError, match="min_soc_percent"):
+            PowerLimitsConfig.from_dict({"min_soc_percent": 150.0})
+
+    # --- max_soc_percent ---
+    def test_max_soc_valid(self):
+        cfg = PowerLimitsConfig.from_dict({"max_soc_percent": 95.0})
+        assert cfg.max_soc_percent == 95.0
+
+    def test_max_soc_at_100(self):
+        cfg = PowerLimitsConfig.from_dict({
+            "min_soc_percent": 5.0, "max_soc_percent": 100.0,
+        })
+        assert cfg.max_soc_percent == 100.0
+
+    def test_max_soc_negative(self):
+        with pytest.raises(ConfigValidationError, match="max_soc_percent"):
+            PowerLimitsConfig.from_dict({"max_soc_percent": -10.0})
+
+    def test_max_soc_over_100(self):
+        with pytest.raises(ConfigValidationError, match="max_soc_percent"):
+            PowerLimitsConfig.from_dict({"max_soc_percent": 101.0})
+
+    # --- cross-validation ---
+    def test_min_soc_equals_max_soc(self):
+        with pytest.raises(ConfigValidationError, match="must be less than"):
+            PowerLimitsConfig.from_dict({
+                "min_soc_percent": 50.0, "max_soc_percent": 50.0,
+            })
+
+    def test_min_soc_greater_than_max_soc(self):
+        with pytest.raises(ConfigValidationError, match="must be less than"):
+            PowerLimitsConfig.from_dict({
+                "min_soc_percent": 90.0, "max_soc_percent": 10.0,
+            })
+
+    # --- type coercion ---
+    def test_string_coercion(self):
+        cfg = PowerLimitsConfig.from_dict({
+            "max_charge_w": "5000", "max_discharge_w": "3000",
+            "ramp_rate_w_per_s": "1000",
+        })
+        assert cfg.max_charge_w == 5000
+
+    def test_string_invalid(self):
+        with pytest.raises(ConfigValidationError, match="max_charge_w"):
+            PowerLimitsConfig.from_dict({"max_charge_w": "abc"})
+
+    # --- defaults ---
+    def test_defaults(self):
+        cfg = PowerLimitsConfig.from_dict({})
+        assert cfg.max_charge_w == 3000
+        assert cfg.max_discharge_w == 3000
+        assert cfg.ramp_rate_w_per_s == 3000
+        assert cfg.min_soc_percent == 10.0
+        assert cfg.max_soc_percent == 90.0
 
 
 # ============================================
