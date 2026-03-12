@@ -368,6 +368,12 @@ class BMSDataCollector:
     UNSTABLE_THRESHOLD = 2
     # Transition to DEGRADED after this many consecutive failures
     DEGRADED_THRESHOLD = 10
+    # After this many DEGRADED retries, downgrade log level to DEBUG
+    DEGRADED_LOG_DOWNGRADE_AFTER = 4
+    # DEGRADED retry interval multiplier (applied every 4 retries)
+    DEGRADED_INTERVAL_MULTIPLIER = 1.5
+    # Maximum DEGRADED retry interval (seconds)
+    DEGRADED_MAX_INTERVAL = 1800.0
 
     def __init__(
         self,
@@ -392,6 +398,7 @@ class BMSDataCollector:
         self._callbacks: List[callable] = []
         self._state_callbacks: List[Callable[[ModbusHealthStatus], None]] = []
         self._reconnect_delay: float = 1.0
+        self._degraded_retries: int = 0
         self._health = ModbusHealthStatus()
 
     @property
@@ -466,12 +473,32 @@ class BMSDataCollector:
     async def _collection_loop(self) -> None:
         """Main collection loop with state-machine-based reconnect."""
         while self._running:
-            # --- DEGRADED: low-frequency retry ---
+            # --- DEGRADED: low-frequency retry with escalating interval ---
             if self._health.state == ModbusConnectionState.DEGRADED:
-                logger.info(
-                    f"Modbus DEGRADED — retrying in {self.degraded_retry_interval:.0f}s"
+                self._degraded_retries += 1
+
+                # Escalate interval: 300s → 450s → 675s → ... → cap 1800s
+                actual_interval = min(
+                    self.degraded_retry_interval * (
+                        self.DEGRADED_INTERVAL_MULTIPLIER
+                        ** (self._degraded_retries // 4)
+                    ),
+                    self.DEGRADED_MAX_INTERVAL,
                 )
-                await asyncio.sleep(self.degraded_retry_interval)
+
+                # Downgrade log level after DEGRADED_LOG_DOWNGRADE_AFTER retries
+                if self._degraded_retries <= self.DEGRADED_LOG_DOWNGRADE_AFTER:
+                    logger.info(
+                        f"Modbus DEGRADED — retry #{self._degraded_retries} "
+                        f"in {actual_interval:.0f}s"
+                    )
+                else:
+                    logger.debug(
+                        f"Modbus DEGRADED — retry #{self._degraded_retries} "
+                        f"in {actual_interval:.0f}s"
+                    )
+
+                await asyncio.sleep(actual_interval)
                 try:
                     await self.client.disconnect()
                     if await self.client.connect():
@@ -482,12 +509,20 @@ class BMSDataCollector:
                         self._health.consecutive_failures = 0
                         self._health.last_success_time = datetime.now(timezone.utc)
                         self._reconnect_delay = 1.0
+                        self._degraded_retries = 0
                         self._transition_state(ModbusConnectionState.CONNECTED)
                         self._notify_data_callbacks(snapshot)
                 except Exception as e:
                     self._health.last_error = str(e)
                     self._health.last_failure_time = datetime.now(timezone.utc)
-                    logger.error(f"Modbus DEGRADED retry failed: {e}")
+                    if self._degraded_retries <= self.DEGRADED_LOG_DOWNGRADE_AFTER:
+                        logger.error(
+                            f"Modbus DEGRADED retry #{self._degraded_retries} failed: {e}"
+                        )
+                    else:
+                        logger.debug(
+                            f"Modbus DEGRADED retry #{self._degraded_retries} failed: {e}"
+                        )
                 continue
 
             # --- CONNECTED / UNSTABLE: normal read ---
