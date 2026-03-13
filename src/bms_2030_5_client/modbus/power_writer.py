@@ -309,11 +309,11 @@ class ModbusPowerWriter:
         對應 IEEE 2030.5 DERControlBase.opModEnergize=false
         
         執行動作：
-        1. 功率設定點歸零（透過 SafePowerController 安全驗證）
+        1. 功率設定點歸零
         2. 記錄去能事件到審計日誌
         
-        注意：此方法不操作 BMS 繼電器（0x000E），
-        繼電器斷開屬於 opModConnect=false 的範疇。
+        注意：此方法不切換 PCS 運行模式。
+        opModConnect=false 有額外的 STANDBY 模式切換，請使用 disconnect()。
         
         Args:
             reason: 去能原因描述
@@ -327,6 +327,71 @@ class ModbusPowerWriter:
         )
         
         return await self.set_power(0, source=f"de-energize:{reason}")
+    
+    async def disconnect(self, reason: str = "opModConnect=false") -> PowerWriteResult:
+        """
+        斷開控制：將 PCS 功率歸零並切換至待機模式
+        
+        對應 IEEE 2030.5 DERControlBase.opModConnect=false
+        
+        執行動作：
+        1. 功率設定點歸零 (POWER_SETPOINT → 0)
+        2. PCS 運行模式切至待機 (OPERATION_MODE → STANDBY(0))
+        3. 記錄斷開事件到審計日誌
+        
+        Args:
+            reason: 斷開原因描述
+        
+        Returns:
+            PowerWriteResult
+        """
+        power_audit_logger.warning(
+            f"DISCONNECT | reason={reason} | "
+            f"timestamp={datetime.now(timezone.utc).isoformat()}"
+        )
+        
+        # Step 1: 功率歸零
+        power_result = await self.set_power(0, source=f"disconnect:{reason}")
+        if not power_result.success:
+            return power_result
+        
+        # Step 2: 切換 PCS 運行模式至 STANDBY
+        try:
+            mode_success = await self.modbus_client.write_register(
+                PCSRegisterAddress.OPERATION_MODE,
+                PCSOperationMode.STANDBY.value,
+            )
+            if mode_success:
+                power_audit_logger.info(
+                    f"DISCONNECT_MODE_SET | "
+                    f"register={PCSRegisterAddress.OPERATION_MODE} | "
+                    f"value={PCSOperationMode.STANDBY.value} (STANDBY)"
+                )
+            else:
+                power_audit_logger.error(
+                    f"DISCONNECT_MODE_FAILED | "
+                    f"register={PCSRegisterAddress.OPERATION_MODE}"
+                )
+                return PowerWriteResult(
+                    success=False,
+                    simulated=False,
+                    requested_power_w=0,
+                    timestamp=datetime.now(timezone.utc),
+                    error_message="Failed to set OPERATION_MODE to STANDBY",
+                )
+        except Exception as e:
+            power_audit_logger.error(
+                f"DISCONNECT_MODE_ERROR | error={e}"
+            )
+            return PowerWriteResult(
+                success=False,
+                simulated=False,
+                requested_power_w=0,
+                timestamp=datetime.now(timezone.utc),
+                error_message=f"OPERATION_MODE write error: {e}",
+            )
+        
+        return power_result
     
     async def emergency_stop(self, reason: str) -> PowerWriteResult:
         """

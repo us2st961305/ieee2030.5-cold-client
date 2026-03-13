@@ -329,6 +329,118 @@ class SafePowerController:
         """注入 PCS writer (延遲注入用)"""
         self._pcs_writer = writer
     
+    async def disconnect_pcs(self, source: str = "opModConnect=false") -> PowerControlResult:
+        """
+        斷開 PCS：功率歸零 + 切換至待機模式
+        
+        對應 IEEE 2030.5 DERControlBase.opModConnect=false
+        DRY_RUN 模式下僅記錄日誌。
+        
+        Args:
+            source: 請求來源
+        
+        Returns:
+            PowerControlResult
+        """
+        request_id = str(uuid4())[:8]
+        timestamp = datetime.now(timezone.utc)
+        
+        # 檢查緊急停止
+        if EmergencyStop.is_stopped():
+            return PowerControlResult(
+                request_id=request_id,
+                mode=self.control_mode,
+                requested_power_w=0,
+                executed=False,
+                simulated=False,
+                timestamp=timestamp,
+                errors=["Emergency stop is active"],
+                message="Disconnect blocked by emergency stop",
+            )
+        
+        # DRY_RUN 模式
+        if self._control_mode == ControlMode.DRY_RUN:
+            self._log_request(request_id, 0, source, "dry_run", [])
+            msg = "[DRY_RUN] Would disconnect PCS: power=0W + OPERATION_MODE=STANDBY"
+            logger.info(msg)
+            return PowerControlResult(
+                request_id=request_id,
+                mode=ControlMode.DRY_RUN,
+                requested_power_w=0,
+                executed=False,
+                simulated=True,
+                timestamp=timestamp,
+                message=msg,
+            )
+        
+        # PRODUCTION 模式
+        if self._pcs_writer:
+            if EmergencyStop.is_stopped():
+                return PowerControlResult(
+                    request_id=request_id,
+                    mode=self.control_mode,
+                    requested_power_w=0,
+                    executed=False,
+                    simulated=False,
+                    timestamp=timestamp,
+                    errors=["Emergency stop is active"],
+                    message="Disconnect blocked by emergency stop (pre-write)",
+                )
+            self._log_request(request_id, 0, source, "executing", [])
+            try:
+                write_result = await self._pcs_writer.disconnect(reason=source)
+                executed = write_result.success
+                msg = (
+                    f"[PRODUCTION] PCS disconnect "
+                    f"{'completed' if executed else 'FAILED'}"
+                )
+                if write_result.error_message:
+                    msg += f" - {write_result.error_message}"
+                self._log_request(
+                    request_id, 0, source,
+                    "executed" if executed else "write_failed",
+                    [write_result.error_message] if write_result.error_message else [],
+                )
+                return PowerControlResult(
+                    request_id=request_id,
+                    mode=ControlMode.PRODUCTION,
+                    requested_power_w=0,
+                    executed=executed,
+                    simulated=False,
+                    timestamp=timestamp,
+                    errors=(
+                        [write_result.error_message]
+                        if write_result.error_message and not executed
+                        else []
+                    ),
+                    message=msg,
+                )
+            except Exception as e:
+                logger.exception(f"PCS disconnect error: {e}")
+                self._log_request(request_id, 0, source, "error", [str(e)])
+                return PowerControlResult(
+                    request_id=request_id,
+                    mode=ControlMode.PRODUCTION,
+                    requested_power_w=0,
+                    executed=False,
+                    simulated=False,
+                    timestamp=timestamp,
+                    errors=[str(e)],
+                    message=f"PCS disconnect error: {e}",
+                )
+        else:
+            self._log_request(request_id, 0, source, "no_writer", [])
+            logger.warning("[PRODUCTION] No PCS writer configured, disconnect not sent")
+            return PowerControlResult(
+                request_id=request_id,
+                mode=ControlMode.PRODUCTION,
+                requested_power_w=0,
+                executed=False,
+                simulated=False,
+                timestamp=timestamp,
+                message="Production mode: No PCS writer configured",
+            )
+    
     @property
     def simulation_mode(self) -> bool:
         """Whether in a non-production (safe) mode. True for DRY_RUN."""

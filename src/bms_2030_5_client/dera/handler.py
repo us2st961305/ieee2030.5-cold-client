@@ -268,24 +268,62 @@ class DERControlHandler:
             logger.warning(f"DERControl blocked by emergency stop: {event.event_id}")
             return
         
-        # 檢查連接/去能控制（opModConnect=false 或 opModEnergize=false → 功率歸零）
+        # 檢查連接/去能控制
         control = event.control
         if control.DERControlBase:
             base = control.DERControlBase
-            if base.opModEnergize is False or base.opModConnect is False:
-                # De-energize / Disconnect: 強制功率歸零
-                de_energize_reason = (
-                    "opModEnergize=false" if base.opModEnergize is False
-                    else "opModConnect=false"
-                )
+            
+            # opModConnect=false: 功率歸零 + PCS 切待機模式
+            if base.opModConnect is False:
                 logger.warning(
-                    f"DERControl {event.event_id}: {de_energize_reason}, "
+                    f"DERControl {event.event_id}: opModConnect=false, "
+                    f"disconnecting PCS (power=0W + STANDBY)"
+                )
+                source = f"{source}:disconnect"
+                try:
+                    result = await self.power_controller.disconnect_pcs(
+                        source=source
+                    )
+                    event.result = result
+                    if result.success:
+                        event.status = DERControlEventStatus.COMPLETED
+                        logger.info(
+                            f"DERControl {event.event_id}: disconnect executed "
+                            f"(simulated={result.simulated})"
+                        )
+                    else:
+                        event.status = DERControlEventStatus.FAILED
+                        event.error_message = "; ".join(result.errors)
+                        logger.error(
+                            f"DERControl disconnect failed: {event.event_id}, "
+                            f"errors={result.errors}"
+                        )
+                except Exception as e:
+                    event.status = DERControlEventStatus.FAILED
+                    event.error_message = str(e)
+                    logger.exception(f"DERControl disconnect error: {event.event_id}")
+                
+                # 取代當前活動控制
+                if self._active_event and self._active_event.event_id != event.event_id:
+                    if self._active_event.status in (DERControlEventStatus.ACTIVE, DERControlEventStatus.COMPLETED):
+                        self._active_event.status = DERControlEventStatus.SUPERSEDED
+                self._active_event = event
+                
+                # 執行回調
+                if self._on_control_executed:
+                    try:
+                        await self._on_control_executed(event)
+                    except Exception as e:
+                        logger.exception(f"Control executed callback error: {e}")
+                return
+            
+            # opModEnergize=false: 僅功率歸零（不切換 PCS 模式）
+            if base.opModEnergize is False:
+                logger.warning(
+                    f"DERControl {event.event_id}: opModEnergize=false, "
                     f"forcing power to 0W"
                 )
-                power_w = 0
                 source = f"{source}:de-energize"
-                
-                # 透過安全控制器設定功率歸零
                 try:
                     result = await self.power_controller.set_power_setpoint(
                         power_w=0,
