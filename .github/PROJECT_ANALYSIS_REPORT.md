@@ -15,7 +15,7 @@
 - **Modbus TCP** 通訊：與 CUBE BMS 電池櫃進行資料採集（系統狀態 + 各 Rack 狀態）
 - **IEEE 2030.5 協議**：向公用事業伺服器回報 DER 狀態、計量數據、接收 DER 控制指令
 - **DER 控制**：支援 Polling 與 Subscription（推播）兩種模式接收控制指令
-- **功率控制**：透過 SafePowerController 安全地執行功率設定點寫入（預設模擬模式）
+- **功率控制**：透過 SafePowerController 安全地執行功率設定點寫入（預設 DRY_RUN 模式）
 - **Web UI**：Flask 網頁介面供操作人員監控與控制
 
 ### 使用的程式語言和主要技術堆疊
@@ -239,7 +239,7 @@ flowchart TD
 
 ### 功率控制安全
 - `SafePowerController` 強制功率限制驗證
-- 預設 `simulation_mode=True`，生產模式需授權 token
+- 預設 `mode="dry_run"`，生產模式需授權 token
 - `EmergencyStop` 提供緊急停機機制
 
 ### XML 安全
