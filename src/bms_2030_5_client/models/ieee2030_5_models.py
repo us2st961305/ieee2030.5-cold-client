@@ -752,6 +752,72 @@ class MirrorUsagePointList:
 
 
 # =============================================================================
+# UsagePoint Models (Standard, non-Mirror — for server recovery via GET /upt)
+# =============================================================================
+
+@dataclass_json
+@dataclass
+class UsagePoint:
+    """
+    Standard UsagePoint resource (IEEE 2030.5 Section 10.11.3(b)).
+
+    Server creates a UsagePoint for each MirrorUsagePoint POSTed.
+    Used for recovery: GET /upt → find matching mRID → drill into sub-resources.
+    """
+    href: Optional[str] = None
+    mRID: Optional[str] = None
+    description: Optional[str] = None
+    version: Optional[int] = None
+    roleFlags: Optional[str] = None
+    serviceCategoryKind: int = 0
+    status: int = 1
+    deviceLFDI: Optional[str] = None
+    MeterReadingListLink: Optional[Link] = None
+
+
+@dataclass_json
+@dataclass
+class UsagePointList:
+    """
+    List of UsagePoint resources (GET /upt).
+    """
+    href: Optional[str] = None
+    all: int = 0
+    results: int = 0
+    UsagePoint: List[UsagePoint] = field(default_factory=list)
+
+
+@dataclass_json
+@dataclass
+class MeterReadingEntry:
+    """
+    Standard MeterReading resource from UsagePoint path (non-Mirror).
+
+    Contains Link references to ReadingType, Reading, and ReadingSetList
+    rather than inline data. Used for recovery via GET /upt/{id}/mr.
+    """
+    href: Optional[str] = None
+    mRID: Optional[str] = None
+    description: Optional[str] = None
+    version: Optional[int] = None
+    ReadingLink: Optional[Link] = None
+    ReadingSetListLink: Optional[Link] = None
+    ReadingTypeLink: Optional[Link] = None
+
+
+@dataclass_json
+@dataclass
+class MeterReadingListResponse:
+    """
+    List of standard MeterReading resources (GET /upt/{id}/mr).
+    """
+    href: Optional[str] = None
+    all: int = 0
+    results: int = 0
+    MeterReading: List[MeterReadingEntry] = field(default_factory=list)
+
+
+# =============================================================================
 # LogEvent Models
 # =============================================================================
 

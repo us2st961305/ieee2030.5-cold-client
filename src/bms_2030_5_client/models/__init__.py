@@ -275,6 +275,11 @@ from bms_2030_5_client.models.ieee2030_5_models import (
     MirrorReadingSet,
     MirrorUsagePoint,
     MirrorUsagePointList,
+    # UsagePoint models (for server recovery)
+    UsagePoint,
+    UsagePointList,
+    MeterReadingEntry,
+    MeterReadingListResponse,
     # LogEvent models
     LogEvent,
     LogEventList,

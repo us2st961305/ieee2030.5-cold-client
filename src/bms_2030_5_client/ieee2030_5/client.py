@@ -35,6 +35,9 @@ from bms_2030_5_client.models import (
     MirrorMeterReading,
     MirrorMeterReadingList,
     LogEvent,
+    ReadingType,
+    UsagePointList,
+    MeterReadingListResponse,
 )
 from bms_2030_5_client.ieee2030_5.xml_utils import (
     dataclass_to_xml,
@@ -922,6 +925,55 @@ class IEEE2030_5Client:
         """
         mmr_path = f"{mup_href}/mmr"
         return await self._get(mmr_path, MirrorMeterReadingList)
+
+    # =========================================================================
+    # UsagePoint Recovery Methods (GET /upt path)
+    # IEEE 2030.5 Section 10.11.3(b): Server creates UsagePoint for each MUP
+    # =========================================================================
+
+    async def get_usage_point_list(self) -> UsagePointList:
+        """
+        Get list of UsagePoint resources (GET /upt).
+
+        IEEE 2030.5 A.4.4.1: Mandatory GET.
+        Used for server recovery when local DB is empty.
+
+        Returns:
+            UsagePointList containing all usage points
+        """
+        return await self._get("/upt", UsagePointList)
+
+    async def get_meter_reading_list(self, upt_href: str) -> MeterReadingListResponse:
+        """
+        Get MeterReadingList from a UsagePoint (GET /upt/{id}/mr).
+
+        IEEE 2030.5 A.4.4.3: Mandatory GET.
+        Each MeterReading contains Links to ReadingType sub-resource.
+
+        Args:
+            upt_href: The href of the UsagePoint (e.g., /upt/488962)
+
+        Returns:
+            MeterReadingListResponse with MeterReadingEntry items
+        """
+        mr_path = f"{upt_href}/mr"
+        return await self._get(mr_path, MeterReadingListResponse)
+
+    async def get_reading_type(self, mr_href: str) -> ReadingType:
+        """
+        Get ReadingType from a MeterReading (GET /upt/{id}/mr/{id}/rt).
+
+        IEEE 2030.5 A.4.4.5: Mandatory GET.
+        Returns full ReadingType with uom, kind, commodity, etc.
+
+        Args:
+            mr_href: The href of the MeterReading (e.g., /upt/488962/mr/488979)
+
+        Returns:
+            ReadingType with measurement characteristics
+        """
+        rt_path = f"{mr_href}/rt"
+        return await self._get(rt_path, ReadingType)
 
     async def update_mirror_usage_point(
         self,

@@ -61,6 +61,7 @@ from bms_2030_5_client.db import (
     DERRecord,
     MirrorUsagePointRecord,
     MirrorMeterReadingRecord,
+    MeterTypeRecord,
 )
 from bms_2030_5_client.cycle_storage import (
     CycleStorage,
@@ -1149,6 +1150,179 @@ class BMSClient:
         # Update previous alarm status
         self._previous_alarm_status = current_alarm
 
+    async def _recover_from_server(self) -> bool:
+        """
+        Recover MirrorUsagePoint data from server when local DB is empty.
+
+        IEEE 2030.5 Section 10.11.3(b): Server creates UsagePoint for each MUP.
+        Recovery path: GET /mup → GET /upt → GET /upt/{id}/mr → GET .../rt (×N)
+
+        This method:
+        1. GET /mup to find our MUP by deviceLFDI (latest by href)
+        2. GET /upt to find matching UsagePoint by mRID
+        3. GET /upt/{id}/mr to get MeterReadingList (descriptions + mRIDs)
+        4. GET /upt/{id}/mr/{id}/rt for each reading to get ReadingType
+        5. Populate DB tables: mirror_usage_point, mirror_meter_reading, meter_types
+        6. Populate memory: _mup_href, _mup_mrid, _reading_mrids
+
+        Returns:
+            True if MUP was recovered (even partially), False if not found
+        """
+        our_lfdi = self.ieee2030_5_client.lfdi
+        if not our_lfdi:
+            logger.warning("[Server Recovery] No LFDI available, cannot recover")
+            return False
+
+        logger.info("=" * 60)
+        logger.info("[Server Recovery] Attempting to recover MUP data from server...")
+        logger.info("=" * 60)
+
+        # Step 1: GET /mup → find our MUP by deviceLFDI
+        try:
+            mup_list = await self.ieee2030_5_client.get_mirror_usage_point_list()
+        except Exception as e:
+            logger.warning(f"[Server Recovery] Failed to GET /mup: {e}")
+            return False
+
+        our_mups = [
+            m for m in (mup_list.MirrorUsagePoint or [])
+            if m.deviceLFDI and m.deviceLFDI.upper() == our_lfdi.upper()
+        ]
+        if not our_mups:
+            logger.info("[Server Recovery] No MirrorUsagePoint found for our LFDI on server")
+            return False
+
+        # Select MUP with highest href number (most recent, server ID auto-increment)
+        def _href_sort_key(mup):
+            try:
+                return int(mup.href.split("/")[-1])
+            except (ValueError, AttributeError, IndexError):
+                return 0
+
+        our_mups.sort(key=_href_sort_key, reverse=True)
+        target_mup = our_mups[0]
+        logger.info(
+            f"[Server Recovery] Found {len(our_mups)} MUP(s) for our LFDI, "
+            f"using latest: {target_mup.href} (mRID={target_mup.mRID})"
+        )
+
+        # Populate MUP in memory
+        self._mup_href = target_mup.href
+        self._mup_mrid = target_mup.mRID
+
+        # Save MUP to DB
+        self._save_mup_to_db(target_mup)
+
+        # Step 2: GET /upt → find UsagePoint with matching mRID
+        upt_href = None
+        try:
+            upt_list = await self.ieee2030_5_client.get_usage_point_list()
+            for upt in (upt_list.UsagePoint or []):
+                if upt.mRID and upt.mRID.upper() == target_mup.mRID.upper():
+                    upt_href = upt.href
+                    logger.info(f"[Server Recovery] Found matching UsagePoint: {upt_href}")
+                    break
+
+            if not upt_href:
+                logger.warning(
+                    "[Server Recovery] No matching UsagePoint found for mRID "
+                    f"{target_mup.mRID} — readings cannot be recovered"
+                )
+                return True  # MUP recovered, readings will be re-registered
+        except Exception as e:
+            logger.warning(f"[Server Recovery] Failed to GET /upt: {e}")
+            return True  # MUP recovered, readings will be re-registered
+
+        # Step 3: GET /upt/{id}/mr → get MeterReadingList
+        try:
+            mr_list = await self.ieee2030_5_client.get_meter_reading_list(upt_href)
+            mr_entries = mr_list.MeterReading or []
+            logger.info(f"[Server Recovery] Found {len(mr_entries)} MeterReading(s) at {upt_href}/mr")
+        except Exception as e:
+            logger.warning(f"[Server Recovery] Failed to GET {upt_href}/mr: {e}")
+            return True  # MUP recovered, readings will be re-registered
+
+        # Step 4: For each MeterReading, cache mRID and GET ReadingType
+        recovered_readings = 0
+        for mr_entry in mr_entries:
+            if not mr_entry.description or not mr_entry.mRID:
+                continue
+
+            # Cache reading mRID in memory
+            key = self._description_to_reading_key(mr_entry.description)
+            if key:
+                self._reading_mrids[key] = mr_entry.mRID
+                recovered_readings += 1
+
+            # GET ReadingType for this MeterReading
+            reading_type = None
+            if mr_entry.ReadingTypeLink and mr_entry.ReadingTypeLink.href:
+                try:
+                    reading_type = await self.ieee2030_5_client.get_reading_type(
+                        mr_entry.href
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[Server Recovery] Failed to GET ReadingType for "
+                        f"{mr_entry.description}: {e}"
+                    )
+
+            # Save MirrorMeterReading record to DB
+            if self._db:
+                mmr_record = MirrorMeterReadingRecord(
+                    mup_href=self._mup_href,
+                    href=mr_entry.href,
+                    mrid=mr_entry.mRID,
+                    description=mr_entry.description,
+                    accumulation_behaviour=(
+                        reading_type.accumulationBehaviour if reading_type else 0
+                    ),
+                    commodity=reading_type.commodity if reading_type else 1,
+                    data_qualifier=(
+                        reading_type.dataQualifier if reading_type else 0
+                    ),
+                    flow_direction=(
+                        reading_type.flowDirection if reading_type else 0
+                    ),
+                    kind=reading_type.kind if reading_type else 0,
+                    power_of_ten_multiplier=(
+                        reading_type.powerOfTenMultiplier if reading_type else 0
+                    ),
+                    uom=reading_type.uom if reading_type else 0,
+                )
+                try:
+                    self._db.save_mirror_meter_reading(mmr_record)
+                except Exception as e:
+                    logger.warning(
+                        f"[Server Recovery] Failed to save MMR to DB: {e}"
+                    )
+
+            # Save meter_type record to DB
+            if self._db and reading_type:
+                try:
+                    self._db.save_meter_type(MeterTypeRecord(
+                        mup_href=self._mup_href,
+                        description=mr_entry.description,
+                        mrid=mr_entry.mRID,
+                        uom_code=reading_type.uom,
+                        kind=reading_type.kind,
+                        commodity=reading_type.commodity,
+                        flow_direction=reading_type.flowDirection,
+                        accumulation_behaviour=reading_type.accumulationBehaviour,
+                        power_of_ten_multiplier=reading_type.powerOfTenMultiplier,
+                        is_active=True,
+                    ))
+                except Exception as e:
+                    logger.warning(
+                        f"[Server Recovery] Failed to save meter_type to DB: {e}"
+                    )
+
+        logger.info(
+            f"[Server Recovery] Recovered {recovered_readings} reading mRIDs: "
+            f"{list(self._reading_mrids.keys())}"
+        )
+        return True
+
     async def _register_meter(self) -> None:
         """
         Register MirrorUsagePoint (meter) with IEEE 2030.5 server.
@@ -1204,7 +1378,58 @@ class BMSClient:
                 self._mup_href = None
                 self._reading_mrids.clear()
                 # _mup_mrid is intentionally preserved
-        
+
+        # Try server recovery when no cached MUP (DB empty or deleted)
+        if not self._mup_href:
+            recovered = await self._recover_from_server()
+            if recovered and self._mup_href:
+                logger.info(f"[Server Recovery] MUP recovered: {self._mup_href} (mRID={self._mup_mrid})")
+                # Check which readings are still missing
+                expected_keys = {
+                    "current", "power", "charge_energy", "discharge_energy",
+                    "max_temperature", "min_temperature", "avg_temperature",
+                    "soh", "cycle_count",
+                }
+                missing_keys = expected_keys - set(self._reading_mrids.keys())
+                if not missing_keys:
+                    logger.info("[Server Recovery] All readings recovered — skip registration")
+                    return
+
+                # Re-register missing readings by POSTing all readings.
+                # Server matches existing by mRID (→ 204) and creates missing (→ 201).
+                logger.info(
+                    f"[Server Recovery] {len(missing_keys)} readings missing: "
+                    f"{missing_keys}, re-registering..."
+                )
+                try:
+                    mup_with_readings = self.adapter.create_bms_mirror_usage_point(
+                        device_lfdi=self.ieee2030_5_client.lfdi,
+                        description="CUBE BMS Meter",
+                        post_rate=self.config.ieee2030_5.poll_rate,
+                        include_readings=True,
+                        mup_mrid=self._mup_mrid,
+                    )
+                    readings = mup_with_readings.MirrorMeterReading
+                    if readings:
+                        await self.ieee2030_5_client.post_mirror_meter_reading_list(
+                            self._mup_href, readings,
+                        )
+                    # Re-fetch from server to sync all reading mRIDs
+                    try:
+                        mmr_list = await self.ieee2030_5_client.get_mirror_meter_reading_list(self._mup_href)
+                        if mmr_list and mmr_list.MirrorMeterReading:
+                            self._cache_reading_mrids_from_server(mmr_list.MirrorMeterReading)
+                            self._save_meter_readings_to_db(self._mup_href, mmr_list.MirrorMeterReading)
+                    except Exception as e:
+                        logger.warning(f"[Server Recovery] Could not re-fetch readings after re-register: {e}")
+                    logger.info(
+                        f"[Server Recovery] Re-registration complete, "
+                        f"reading mRIDs: {list(self._reading_mrids.keys())}"
+                    )
+                except Exception as e:
+                    logger.warning(f"[Server Recovery] Failed to re-register missing readings: {e}")
+                return
+
         logger.info("[Full Registration] Creating new MirrorUsagePoint (meter)...")
         
         try:
