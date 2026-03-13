@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import sys
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -205,8 +206,9 @@ class PowerValidator:
 
 
 class EmergencyStop:
-    """緊急停止單例"""
+    """緊急停止單例（thread-safe）"""
     
+    _lock = threading.Lock()
     _stopped: bool = False
     _reason: Optional[str] = None
     _timestamp: Optional[datetime] = None
@@ -214,27 +216,30 @@ class EmergencyStop:
     @classmethod
     def trigger(cls, reason: str) -> None:
         """觸發緊急停止"""
-        cls._stopped = True
-        cls._reason = reason
-        cls._timestamp = datetime.now(timezone.utc)
-        safe_reason = _LOG_SANITIZE_RE.sub("", reason)[:200]
-        power_audit_logger.critical(
-            f"EMERGENCY_STOP | reason={safe_reason} | timestamp={cls._timestamp.isoformat()}"
-        )
+        with cls._lock:
+            cls._stopped = True
+            cls._reason = reason
+            cls._timestamp = datetime.now(timezone.utc)
+            safe_reason = _LOG_SANITIZE_RE.sub("", reason)[:200]
+            power_audit_logger.critical(
+                f"EMERGENCY_STOP | reason={safe_reason} | timestamp={cls._timestamp.isoformat()}"
+            )
     
     @classmethod
     def is_stopped(cls) -> bool:
         """檢查是否已觸發緊急停止"""
-        return cls._stopped
+        with cls._lock:
+            return cls._stopped
     
     @classmethod
     def get_status(cls) -> dict:
         """獲取緊急停止狀態"""
-        return {
-            "stopped": cls._stopped,
-            "reason": cls._reason,
-            "timestamp": cls._timestamp.isoformat() if cls._timestamp else None
-        }
+        with cls._lock:
+            return {
+                "stopped": cls._stopped,
+                "reason": cls._reason,
+                "timestamp": cls._timestamp.isoformat() if cls._timestamp else None
+            }
     
     @classmethod
     def reset(cls, authorization_token: str) -> bool:
@@ -250,13 +255,14 @@ class EmergencyStop:
             power_audit_logger.warning("Failed emergency stop reset: invalid token")
             return False
         
-        safe_reason = _LOG_SANITIZE_RE.sub("", cls._reason or "")[:200]
-        power_audit_logger.warning(
-            f"EMERGENCY_STOP_RESET | previous_reason={safe_reason}"
-        )
-        cls._stopped = False
-        cls._reason = None
-        cls._timestamp = None
+        with cls._lock:
+            safe_reason = _LOG_SANITIZE_RE.sub("", cls._reason or "")[:200]
+            power_audit_logger.warning(
+                f"EMERGENCY_STOP_RESET | previous_reason={safe_reason}"
+            )
+            cls._stopped = False
+            cls._reason = None
+            cls._timestamp = None
         return True
 
 

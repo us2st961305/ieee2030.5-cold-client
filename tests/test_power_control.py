@@ -25,14 +25,15 @@ from bms_2030_5_client.power_control import (
 @pytest.fixture(autouse=True)
 def reset_emergency_stop():
     """每個測試後重置緊急停止狀態"""
-    # 使用內部方式重置（僅用於測試）
-    EmergencyStop._stopped = False
-    EmergencyStop._reason = None
-    EmergencyStop._timestamp = None
+    with EmergencyStop._lock:
+        EmergencyStop._stopped = False
+        EmergencyStop._reason = None
+        EmergencyStop._timestamp = None
     yield
-    EmergencyStop._stopped = False
-    EmergencyStop._reason = None
-    EmergencyStop._timestamp = None
+    with EmergencyStop._lock:
+        EmergencyStop._stopped = False
+        EmergencyStop._reason = None
+        EmergencyStop._timestamp = None
 
 
 @pytest.fixture(autouse=True)
@@ -286,6 +287,60 @@ class TestEmergencyStop:
         
         assert result is True
         assert EmergencyStop.is_stopped() is False
+
+    def test_concurrent_trigger_and_get_status(self):
+        """測試並發 trigger + get_status 狀態一致性"""
+        import threading
+
+        errors: list[str] = []
+
+        def trigger_loop():
+            for i in range(200):
+                EmergencyStop.trigger(f"reason-{i}")
+
+        def read_loop():
+            for _ in range(200):
+                status = EmergencyStop.get_status()
+                if status["stopped"] and status["reason"] is None:
+                    errors.append("stopped=True but reason=None")
+                if status["stopped"] and status["timestamp"] is None:
+                    errors.append("stopped=True but timestamp=None")
+
+        t1 = threading.Thread(target=trigger_loop)
+        t2 = threading.Thread(target=read_loop)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert errors == [], f"Race condition detected: {errors[:5]}"
+
+    def test_concurrent_trigger_and_reset(self, monkeypatch):
+        """測試並發 trigger + reset 不會丟失觸發原因"""
+        import threading
+
+        monkeypatch.setenv("POWER_CONTROL_SAFETY_TOKEN", "tok")
+        errors: list[str] = []
+
+        def trigger_and_check():
+            for i in range(200):
+                EmergencyStop.trigger(f"fault-{i}")
+                status = EmergencyStop.get_status()
+                if status["stopped"] and status["reason"] is None:
+                    errors.append(f"iter {i}: stopped but reason lost")
+
+        def reset_loop():
+            for _ in range(200):
+                EmergencyStop.reset("tok")
+
+        t1 = threading.Thread(target=trigger_and_check)
+        t2 = threading.Thread(target=reset_loop)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert errors == [], f"Race condition detected: {errors[:5]}"
 
 
 class TestSafetyEnvironmentCheck:
