@@ -277,10 +277,14 @@ power_control:
     max_soc_percent: 90.0       # SOC 上限
 
   # Production mode authorization (required when mode=production)
+  # Step 1: Set a strong safety_token here
+  # Step 2: Run CLI to unlock: bms-unlock-production --config config/runtime.yaml
+  # Step 3: Restart the service — SafePowerController will verify the lockfile
+  # Revoke: bms-unlock-production --revoke
   production_auth:
-    # Can also be set via env: POWER_CONTROL_SAFETY_TOKEN
+    # Secret token used to sign the production lockfile (keep this secure)
     safety_token: ""
-    # Set to true to acknowledge risks (equivalent to env I_UNDERSTAND_THE_RISKS)
+    # Legacy field (ignored) — use CLI unlock instead
     confirm_production: false
 
 # ----------------------------------------

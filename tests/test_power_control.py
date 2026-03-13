@@ -4,8 +4,16 @@ Power Control Safety Tests (功率控制安全測試)
 測試確保安全機制正確運作，防止意外向 PCS 發送指令
 """
 
+import json
+import platform
+
 import pytest
 
+from bms_2030_5_client.cli.unlock_production import (
+    create_lockfile,
+    revoke_lockfile,
+    verify_lockfile,
+)
 from bms_2030_5_client.power_control import (
     AuthorizationRequired,
     ControlMode,
@@ -38,6 +46,12 @@ def enforce_simulation_mode(monkeypatch):
     monkeypatch.setenv("POWER_CONTROL_MODE", "dry_run")
     monkeypatch.delenv("POWER_CONTROL_SAFETY_TOKEN", raising=False)
     monkeypatch.delenv("POWER_CONTROL_CONFIRM_PRODUCTION", raising=False)
+
+
+@pytest.fixture
+def lockfile_dir(tmp_path):
+    """Provide a temporary directory for lockfile tests."""
+    return tmp_path / ".production_unlock"
 
 
 class TestPowerLimits:
@@ -225,27 +239,35 @@ class TestSafePowerController:
         assert result.requested_power_w == -30_000
     
     def test_production_mode_requires_authorization(self, monkeypatch):
-        """測試生產模式需要授權"""
+        """測試生產模式需要授權（無 lockfile）"""
         monkeypatch.delenv("POWER_CONTROL_SAFETY_TOKEN", raising=False)
         
-        with pytest.raises(AuthorizationRequired):
+        with pytest.raises(AuthorizationRequired, match="safety_token"):
             SafePowerController(PowerControlConfig(mode="production"))
     
-    def test_production_mode_requires_confirmation(self, monkeypatch):
-        """測試生產模式需要確認"""
-        monkeypatch.setenv("POWER_CONTROL_SAFETY_TOKEN", "test_token")
-        monkeypatch.delenv("POWER_CONTROL_CONFIRM_PRODUCTION", raising=False)
-        
-        with pytest.raises(AuthorizationRequired):
-            SafePowerController(PowerControlConfig(mode="production"))
+    def test_production_mode_requires_lockfile(self, monkeypatch, lockfile_dir):
+        """測試生產模式需要 lockfile"""
+        monkeypatch.setenv("POWER_CONTROL_SAFETY_TOKEN", "test_secret_token")
+        # No lockfile created — should fail
+        with pytest.raises(AuthorizationRequired, match="CLI unlock"):
+            config = PowerControlConfig(mode="production")
+            config._safety_token = "test_secret_token"
+            SafePowerController(config)
     
-    def test_production_mode_with_full_authorization(self, monkeypatch):
-        """測試生產模式完整授權"""
-        monkeypatch.setenv("POWER_CONTROL_SAFETY_TOKEN", "test_token")
-        monkeypatch.setenv("POWER_CONTROL_CONFIRM_PRODUCTION", "I_UNDERSTAND_THE_RISKS")
+    def test_production_mode_with_valid_lockfile(self, monkeypatch, lockfile_dir):
+        """測試生產模式完整授權（CLI lockfile）"""
+        token = "my_strong_secret_token"
+        create_lockfile(token, lockfile_dir)
         
-        # 應該能成功創建（不拋出異常）
-        controller = SafePowerController(PowerControlConfig(mode="production"))
+        # Patch verify_lockfile where it's imported inside the method
+        monkeypatch.setattr(
+            "bms_2030_5_client.cli.unlock_production.verify_lockfile",
+            lambda t, lp=None: verify_lockfile(t, lockfile_dir),
+        )
+        
+        config = PowerControlConfig(mode="production")
+        config._safety_token = token
+        controller = SafePowerController(config)
         assert controller.control_mode == ControlMode.PRODUCTION
 
 
@@ -337,6 +359,60 @@ class TestEmergencyStop:
         t2.join()
 
         assert errors == [], f"Race condition detected: {errors[:5]}"
+
+
+class TestProductionLockfile:
+    """測試 CLI lockfile 機制"""
+
+    def test_create_and_verify_lockfile(self, tmp_path):
+        """測試建立並驗證 lockfile"""
+        lf = tmp_path / ".production_unlock"
+        token = "secret123"
+        create_lockfile(token, lf)
+        assert lf.is_file()
+        assert verify_lockfile(token, lf) is True
+
+    def test_verify_wrong_token(self, tmp_path):
+        """測試錯誤 token 驗證失敗"""
+        lf = tmp_path / ".production_unlock"
+        create_lockfile("correct_token", lf)
+        assert verify_lockfile("wrong_token", lf) is False
+
+    def test_verify_missing_lockfile(self, tmp_path):
+        """測試不存在的 lockfile"""
+        lf = tmp_path / ".production_unlock"
+        assert verify_lockfile("any_token", lf) is False
+
+    def test_verify_tampered_lockfile(self, tmp_path):
+        """測試被篡改的 lockfile"""
+        lf = tmp_path / ".production_unlock"
+        create_lockfile("real_token", lf)
+
+        data = json.loads(lf.read_text())
+        data["hostname"] = "evil-host"
+        lf.write_text(json.dumps(data))
+
+        assert verify_lockfile("real_token", lf) is False
+
+    def test_verify_hostname_mismatch(self, tmp_path, monkeypatch):
+        """測試 hostname 變更後驗證失敗"""
+        lf = tmp_path / ".production_unlock"
+        create_lockfile("tok", lf)
+
+        monkeypatch.setattr(platform, "node", lambda: "other-host")
+        assert verify_lockfile("tok", lf) is False
+
+    def test_revoke_lockfile(self, tmp_path):
+        """測試撤銷 lockfile"""
+        lf = tmp_path / ".production_unlock"
+        create_lockfile("tok", lf)
+        assert revoke_lockfile(lf) is True
+        assert not lf.exists()
+
+    def test_revoke_nonexistent(self, tmp_path):
+        """測試撤銷不存在的 lockfile"""
+        lf = tmp_path / ".production_unlock"
+        assert revoke_lockfile(lf) is False
 
 
 class TestIEEE2030_5Integration:

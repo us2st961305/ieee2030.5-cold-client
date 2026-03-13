@@ -31,6 +31,7 @@ ruff = "^0.2.0"
 [tool.poetry.scripts]
 bms-client = "bms_2030_5_client.main:main"
 bms-web = "bms_2030_5_client.web.cli:main"
+bms-unlock-production = "bms_2030_5_client.cli.unlock_production:main"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

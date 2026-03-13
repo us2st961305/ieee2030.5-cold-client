@@ -309,21 +309,25 @@ class SafePowerController:
         return ControlMode.DRY_RUN
     
     def _verify_production_authorization(self) -> None:
-        """驗證生產模式授權"""
-        safety_token = os.getenv("POWER_CONTROL_SAFETY_TOKEN")
+        """Verify production mode authorization via CLI lockfile."""
+        from bms_2030_5_client.cli.unlock_production import verify_lockfile
+
+        safety_token = getattr(self.config, '_safety_token', '') or os.getenv(
+            "POWER_CONTROL_SAFETY_TOKEN", ""
+        )
         if not safety_token:
             raise AuthorizationRequired(
-                "Production mode requires POWER_CONTROL_SAFETY_TOKEN environment variable"
+                "Production mode requires safety_token in runtime.yaml "
+                "(power_control.production_auth.safety_token)"
             )
-        
-        confirm = os.getenv("POWER_CONTROL_CONFIRM_PRODUCTION")
-        if confirm != "I_UNDERSTAND_THE_RISKS":
+
+        if not verify_lockfile(safety_token):
             raise AuthorizationRequired(
-                "Production mode requires POWER_CONTROL_CONFIRM_PRODUCTION="
-                "'I_UNDERSTAND_THE_RISKS'"
+                "Production mode requires CLI unlock. "
+                "Run: bms-unlock-production --config config/runtime.yaml"
             )
-        
-        logger.warning("SafePowerController initialized in PRODUCTION mode")
+
+        logger.warning("SafePowerController initialized in PRODUCTION mode (lockfile verified)")
     
     def set_pcs_writer(self, writer) -> None:
         """注入 PCS writer (延遲注入用)"""
@@ -649,19 +653,15 @@ def create_power_controller_from_runtime(runtime_power_config) -> SafePowerContr
         max_soc_percent=limits.max_soc_percent,
     )
     
-    # 如果是 production 模式，設定環境變數以通過授權檢查
-    if mode == RTPowerControlMode.PRODUCTION.value:
-        auth = runtime_power_config.production_auth
-        if auth.safety_token:
-            os.environ.setdefault("POWER_CONTROL_SAFETY_TOKEN", auth.safety_token)
-        if auth.confirm_production:
-            os.environ.setdefault("POWER_CONTROL_CONFIRM_PRODUCTION", "I_UNDERSTAND_THE_RISKS")
-    
-    # 構建 PowerControlConfig
+    # 構建 PowerControlConfig，將 safety_token 附加到 config 供 lockfile 驗證
     config = PowerControlConfig(
         mode=mode,
         limits=power_limits,
     )
+    if mode == RTPowerControlMode.PRODUCTION.value:
+        auth = runtime_power_config.production_auth
+        if auth.safety_token:
+            config._safety_token = auth.safety_token  # type: ignore[attr-defined]
     
     controller = SafePowerController(config=config)
     
