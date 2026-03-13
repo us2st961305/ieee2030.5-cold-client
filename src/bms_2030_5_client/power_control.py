@@ -457,6 +457,18 @@ class SafePowerController:
         
         # 5. 生產模式：透過 ModbusPowerWriter 實際寫入 PCS
         if self._pcs_writer:
+            # Double-check: 縮小 TOCTOU 窗口
+            if EmergencyStop.is_stopped():
+                return PowerControlResult(
+                    request_id=request_id,
+                    mode=self.control_mode,
+                    requested_power_w=power_w,
+                    executed=False,
+                    simulated=False,
+                    timestamp=timestamp,
+                    errors=["Emergency stop is active"],
+                    message="Operation blocked by emergency stop (pre-write check)"
+                )
             self._log_request(request_id, power_w, source, "executing", [])
             try:
                 write_result = await self._pcs_writer.set_power(

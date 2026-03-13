@@ -243,6 +243,19 @@ class ModbusPowerWriter:
         
         # 重試機制
         for attempt in range(self.config.max_retries):
+            # Emergency stop guard: 每次重試前檢查
+            if EmergencyStop.is_stopped():
+                power_audit_logger.warning(
+                    f"MODBUS_WRITE_ABORTED | power={power_w}W | "
+                    f"reason=emergency_stop | attempt={attempt + 1}"
+                )
+                return PowerWriteResult(
+                    success=False,
+                    simulated=False,
+                    requested_power_w=power_w,
+                    timestamp=timestamp,
+                    error_message="Aborted: emergency stop active",
+                )
             try:
                 if self.config.use_32bit_power:
                     # 32-bit 寫入（高位元 + 低位元）
