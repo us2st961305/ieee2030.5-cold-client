@@ -236,7 +236,7 @@ class DERClient:
         
         logger.info(
             f"DERClient initialized "
-            f"(simulation_mode={power_controller.simulation_mode})"
+            f"(control_mode={power_controller.control_mode.value})"
         )
     
     # =========================================================================

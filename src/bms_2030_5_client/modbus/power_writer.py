@@ -1,14 +1,14 @@
 """
-Modbus Power Writer - 安全的功率設定點寫入介面
+Modbus Power Writer - PCS 功率設定點寫入介面
 
 此模組負責：
 1. 透過 Modbus 將功率設定點寫入 PCS
-2. 整合 SafePowerController 確保安全
-3. 支援模擬模式（不實際寫入）
+2. 支援重試機制和寫入後驗證
+3. 安全檢查由 SafePowerController 負責
 
-⚠️ 安全注意：
-- 此模組預設為模擬模式
-- 生產模式需要特殊授權
+⚗️ 安全注意：
+- 功率驗證和模式控制由 SafePowerController 執行
+- 此模組僅負責 Modbus I/O
 - 所有寫入操作都會記錄到審計日誌
 """
 
@@ -23,13 +23,7 @@ from enum import Enum
 from typing import Callable, Optional, Awaitable
 
 from bms_2030_5_client.power_control import (
-    SafePowerController,
-    PowerControlConfig,
-    PowerControlResult,
-    PowerLimits,
-    ControlMode,
     EmergencyStop,
-    check_safety_environment,
 )
 
 logger = logging.getLogger(__name__)
@@ -103,57 +97,37 @@ class ModbusPowerWriterConfig:
 
 class ModbusPowerWriter:
     """
-    Modbus 功率寫入器
+    Modbus 功率寫入器 — 純 I/O 層
     
-    整合 SafePowerController 實現安全的功率寫入
+    僅負責 Modbus 暫存器讀寫，安全檢查由 SafePowerController 執行。
     
     使用方式:
-        writer = ModbusPowerWriter(
-            modbus_client=modbus_client,
-            power_controller=safe_controller,
-        )
+        writer = ModbusPowerWriter(modbus_client=modbus_client)
         
-        # 設定功率（模擬模式下只會記錄）
-        result = await writer.set_power(50000)  # 50kW
-    
-    ⚠️ 安全注意：
-    - 預設為模擬模式
-    - 生產模式需要配置 SafePowerController
+        # 直接寫入（應由 SafePowerController 調用）
+        result = await writer.write_power_to_modbus(50000)
     """
     
     def __init__(
         self,
         modbus_client,  # ModbusBMSClient
-        power_controller: Optional[SafePowerController] = None,
         config: Optional[ModbusPowerWriterConfig] = None,
     ):
         """
-        初始化 Modbus 功率寫入器
+        Initialize Modbus power writer.
         
         Args:
-            modbus_client: Modbus 客戶端
-            power_controller: 安全功率控制器（如果為 None，將創建預設的模擬模式控制器）
-            config: 寫入器配置
+            modbus_client: Modbus client for register I/O.
+            config: Writer configuration.
         """
         self.modbus_client = modbus_client
-        self.power_controller = power_controller or SafePowerController(
-            PowerControlConfig(simulation_mode=True)
-        )
         self.config = config or ModbusPowerWriterConfig()
         
         # 當前狀態
         self._current_power_w: int = 0
         self._last_write_time: Optional[float] = None
         
-        logger.info(
-            f"ModbusPowerWriter initialized "
-            f"(simulation_mode={self.power_controller.simulation_mode})"
-        )
-    
-    @property
-    def simulation_mode(self) -> bool:
-        """是否為模擬模式"""
-        return self.power_controller.simulation_mode
+        logger.info("ModbusPowerWriter initialized")
     
     @property
     def current_power_w(self) -> int:
@@ -166,66 +140,25 @@ class ModbusPowerWriter:
         source: str = "manual"
     ) -> PowerWriteResult:
         """
-        設定功率設定點
+        設定功率設定點（直接寫入 Modbus）
+        
+        ⚗️ 外部調用者應透過 SafePowerController.set_power_setpoint() 以確保安全檢查。
+        此方法僅供內部和特殊場景（stop/de_energize）使用。
         
         Args:
             power_w: 功率設定點（W）
-                    正值 = 放電, 負值 = 充電
             source: 請求來源
         
         Returns:
-            PowerWriteResult 包含寫入結果
+            PowerWriteResult
         """
-        timestamp = datetime.now(timezone.utc)
-        
-        # 1. 透過安全控制器驗證和執行
-        control_result = await self.power_controller.set_power_setpoint(
-            power_w=power_w,
-            source=source
-        )
-        
-        # 2. 如果驗證失敗，返回錯誤
-        if not control_result.success:
-            return PowerWriteResult(
-                success=False,
-                simulated=control_result.simulated,
-                requested_power_w=power_w,
-                timestamp=timestamp,
-                error_message="; ".join(control_result.errors)
-            )
-        
-        # 3. 模擬模式：只記錄不實際寫入
-        if control_result.simulated:
-            self._current_power_w = power_w
-            self._last_write_time = time.time()
-            
-            logger.info(
-                f"[SIMULATION] Power setpoint: {power_w}W "
-                f"(would write to register {self.config.power_setpoint_address})"
-            )
-            
-            return PowerWriteResult(
-                success=True,
-                simulated=True,
-                requested_power_w=power_w,
-                timestamp=timestamp,
-                register_address=self.config.power_setpoint_address,
-            )
-        
-        # 4. 生產模式：實際寫入 Modbus
-        write_result = await self._write_power_to_modbus(power_w)
-        
-        if write_result.success:
-            self._current_power_w = power_w
-            self._last_write_time = time.time()
-        
-        return write_result
+        return await self.write_power_to_modbus(power_w)
     
-    async def _write_power_to_modbus(self, power_w: int) -> PowerWriteResult:
+    async def write_power_to_modbus(self, power_w: int) -> PowerWriteResult:
         """
-        實際寫入功率到 Modbus
+        寫入功率到 Modbus
         
-        ⚠️ 此方法只在生產模式下被調用
+        由 SafePowerController 在 PRODUCTION 模式下調用。
         """
         timestamp = datetime.now(timezone.utc)
         
@@ -292,6 +225,9 @@ class ModbusPowerWriter:
                     f"power={power_w}W | "
                     f"actual={actual_value}W"
                 )
+                
+                self._current_power_w = power_w
+                self._last_write_time = time.monotonic()
                 
                 return PowerWriteResult(
                     success=True,
@@ -400,14 +336,14 @@ class ModbusPowerWriter:
         """
         EmergencyStop.trigger(reason)
         
-        # 立即重置 current_power_w（不需要等待 set_power）
+        # 立即重置 current_power_w
         self._current_power_w = 0
         
         logger.critical(f"Emergency stop triggered: {reason}")
         
         return PowerWriteResult(
             success=True,
-            simulated=self.power_controller.simulation_mode,
+            simulated=False,
             requested_power_w=0,
             timestamp=datetime.now(timezone.utc),
             error_message=f"Emergency stop: {reason}"
@@ -454,7 +390,7 @@ class PCSPowerAdapter:
         if power_w is None:
             return PowerWriteResult(
                 success=False,
-                simulated=True,
+                simulated=False,
                 requested_power_w=0,
                 error_message="No power setpoint in DERControl"
             )

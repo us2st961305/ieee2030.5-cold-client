@@ -163,10 +163,10 @@ subscription:
 
 ```bash
 # 開發/測試（預設）
-POWER_CONTROL_SIMULATION=true
+POWER_CONTROL_MODE=dry_run
 
 # 生產環境（需要授權）
-POWER_CONTROL_SIMULATION=false
+POWER_CONTROL_MODE=production
 POWER_CONTROL_SAFETY_TOKEN=<secure_token>
 ```
 

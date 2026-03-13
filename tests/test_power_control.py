@@ -4,9 +4,6 @@ Power Control Safety Tests (功率控制安全測試)
 測試確保安全機制正確運作，防止意外向 PCS 發送指令
 """
 
-import os
-from unittest.mock import patch
-
 import pytest
 
 from bms_2030_5_client.power_control import (
@@ -18,7 +15,6 @@ from bms_2030_5_client.power_control import (
     PowerLimits,
     PowerValidator,
     SafePowerController,
-    check_safety_environment,
 )
 
 
@@ -38,8 +34,8 @@ def reset_emergency_stop():
 
 @pytest.fixture(autouse=True)
 def enforce_simulation_mode(monkeypatch):
-    """強制所有測試使用模擬模式"""
-    monkeypatch.setenv("POWER_CONTROL_SIMULATION", "true")
+    """強制所有測試使用 dry_run 模式"""
+    monkeypatch.setenv("POWER_CONTROL_MODE", "dry_run")
     monkeypatch.delenv("POWER_CONTROL_SAFETY_TOKEN", raising=False)
     monkeypatch.delenv("POWER_CONTROL_CONFIRM_PRODUCTION", raising=False)
 
@@ -149,19 +145,19 @@ class TestPowerControlConfig:
     """測試功率控制配置"""
     
     def test_default_simulation_mode(self):
-        """測試預設為模擬模式"""
+        """測試預設為 dry_run 模式"""
         config = PowerControlConfig()
-        assert config.simulation_mode is True
+        assert config.mode == "dry_run"
     
     def test_from_env_default(self, monkeypatch):
         """測試從環境變數創建配置（預設）"""
-        monkeypatch.setenv("POWER_CONTROL_SIMULATION", "true")
+        monkeypatch.setenv("POWER_CONTROL_MODE", "dry_run")
         config = PowerControlConfig.from_env()
-        assert config.simulation_mode is True
+        assert config.mode == "dry_run"
     
     def test_from_env_with_limits(self, monkeypatch):
         """測試從環境變數創建配置（自訂限制）"""
-        monkeypatch.setenv("POWER_CONTROL_SIMULATION", "true")
+        monkeypatch.setenv("POWER_CONTROL_MODE", "dry_run")
         monkeypatch.setenv("MAX_CHARGE_POWER_W", "50000")
         monkeypatch.setenv("MAX_DISCHARGE_POWER_W", "75000")
         config = PowerControlConfig.from_env()
@@ -174,29 +170,29 @@ class TestSafePowerController:
     
     @pytest.fixture
     def controller(self):
-        return SafePowerController(PowerControlConfig(simulation_mode=True))
+        return SafePowerController(PowerControlConfig(mode="dry_run"))
     
     def test_default_is_simulation_mode(self, controller):
-        """測試預設為模擬模式"""
+        """測試預設為 dry_run 模式"""
         assert controller.simulation_mode is True
-        assert controller.control_mode == ControlMode.SIMULATION
+        assert controller.control_mode == ControlMode.DRY_RUN
     
     @pytest.mark.asyncio
     async def test_simulation_mode_does_not_execute(self, controller):
-        """測試模擬模式不會實際執行"""
+        """測試 dry_run 模式不會實際執行"""
         result = await controller.set_power_setpoint(50_000)
         
         assert result.simulated is True
         assert result.executed is False
         assert result.success is True
-        assert result.mode == ControlMode.SIMULATION
+        assert result.mode == ControlMode.DRY_RUN
     
     @pytest.mark.asyncio
     async def test_simulation_mode_logs_correctly(self, controller, caplog):
-        """測試模擬模式正確記錄"""
+        """測試 dry_run 模式正確記錄"""
         await controller.set_power_setpoint(50_000, source="test")
         
-        assert "SIMULATION" in caplog.text or "simulated" in caplog.text.lower()
+        assert "DRY_RUN" in caplog.text or "dry_run" in caplog.text
     
     @pytest.mark.asyncio
     async def test_validation_errors_block_operation(self, controller):
@@ -233,7 +229,7 @@ class TestSafePowerController:
         monkeypatch.delenv("POWER_CONTROL_SAFETY_TOKEN", raising=False)
         
         with pytest.raises(AuthorizationRequired):
-            SafePowerController(PowerControlConfig(simulation_mode=False))
+            SafePowerController(PowerControlConfig(mode="production"))
     
     def test_production_mode_requires_confirmation(self, monkeypatch):
         """測試生產模式需要確認"""
@@ -241,7 +237,7 @@ class TestSafePowerController:
         monkeypatch.delenv("POWER_CONTROL_CONFIRM_PRODUCTION", raising=False)
         
         with pytest.raises(AuthorizationRequired):
-            SafePowerController(PowerControlConfig(simulation_mode=False))
+            SafePowerController(PowerControlConfig(mode="production"))
     
     def test_production_mode_with_full_authorization(self, monkeypatch):
         """測試生產模式完整授權"""
@@ -249,7 +245,7 @@ class TestSafePowerController:
         monkeypatch.setenv("POWER_CONTROL_CONFIRM_PRODUCTION", "I_UNDERSTAND_THE_RISKS")
         
         # 應該能成功創建（不拋出異常）
-        controller = SafePowerController(PowerControlConfig(simulation_mode=False))
+        controller = SafePowerController(PowerControlConfig(mode="production"))
         assert controller.control_mode == ControlMode.PRODUCTION
 
 
@@ -343,51 +339,12 @@ class TestEmergencyStop:
         assert errors == [], f"Race condition detected: {errors[:5]}"
 
 
-class TestSafetyEnvironmentCheck:
-    """測試安全環境檢查"""
-    
-    def test_simulation_mode_returns_true(self, monkeypatch):
-        """測試模擬模式返回 True"""
-        monkeypatch.setenv("POWER_CONTROL_SIMULATION", "true")
-        
-        result = check_safety_environment()
-        
-        assert result is True
-    
-    def test_production_mode_without_token_exits(self, monkeypatch):
-        """測試生產模式無 token 時退出"""
-        monkeypatch.setenv("POWER_CONTROL_SIMULATION", "false")
-        monkeypatch.delenv("POWER_CONTROL_SAFETY_TOKEN", raising=False)
-        
-        with pytest.raises(SystemExit):
-            check_safety_environment()
-    
-    def test_production_mode_without_confirmation_exits(self, monkeypatch):
-        """測試生產模式無確認時退出"""
-        monkeypatch.setenv("POWER_CONTROL_SIMULATION", "false")
-        monkeypatch.setenv("POWER_CONTROL_SAFETY_TOKEN", "token")
-        monkeypatch.delenv("POWER_CONTROL_CONFIRM_PRODUCTION", raising=False)
-        
-        with pytest.raises(SystemExit):
-            check_safety_environment()
-    
-    def test_production_mode_with_full_auth(self, monkeypatch):
-        """測試生產模式完整授權"""
-        monkeypatch.setenv("POWER_CONTROL_SIMULATION", "false")
-        monkeypatch.setenv("POWER_CONTROL_SAFETY_TOKEN", "token")
-        monkeypatch.setenv("POWER_CONTROL_CONFIRM_PRODUCTION", "I_UNDERSTAND_THE_RISKS")
-        
-        result = check_safety_environment()
-        
-        assert result is False  # False 表示非模擬模式
-
-
 class TestIEEE2030_5Integration:
     """測試 IEEE 2030.5 整合場景"""
     
     @pytest.fixture
     def controller(self):
-        return SafePowerController(PowerControlConfig(simulation_mode=True))
+        return SafePowerController(PowerControlConfig(mode="dry_run"))
     
     @pytest.mark.asyncio
     async def test_der_control_op_mod_fixed_w_simulation(self, controller):

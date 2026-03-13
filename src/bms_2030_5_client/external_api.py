@@ -280,7 +280,7 @@ class APIStatus:
     total_commands_sent: int = 0
     total_commands_acked: int = 0
     simulation_mode: bool = True
-    control_mode: str = "simulation"
+    control_mode: str = "dry_run"
     
     def to_dict(self) -> Dict[str, Any]:
         """轉換為字典格式"""
@@ -754,7 +754,7 @@ class ExternalIntegrationAPI:
             )
         
         simulation_mode = True
-        control_mode = "simulation"
+        control_mode = "dry_run"
         if self._power_controller:
             simulation_mode = self._power_controller.simulation_mode
             control_mode = self._power_controller.control_mode.value

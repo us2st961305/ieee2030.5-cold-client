@@ -406,7 +406,7 @@ class DERControlIntegration:
         
         logger.info(
             f"DERControlIntegration initialized "
-            f"(simulation_mode={power_controller.simulation_mode})"
+            f"(control_mode={power_controller.control_mode.value})"
         )
     
     async def start(self) -> None:

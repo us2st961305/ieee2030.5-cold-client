@@ -1,7 +1,7 @@
 """
 Power Control Safety Module (功率控制安全模組)
 
-此模組提供安全的功率控制介面，確保開發和測試時不會意外向 PCS 發送指令。
+此模組提供安全的功率控制介面，確保所有功率指令經過驗證。
 
 使用方式:
     from bms_2030_5_client.power_control import (
@@ -12,7 +12,7 @@ Power Control Safety Module (功率控制安全模組)
     )
     
     controller = SafePowerController(config)
-    result = await controller.set_power_setpoint(50000)  # 50kW (模擬模式)
+    result = await controller.set_power_setpoint(50000)  # 50kW (DRY_RUN mode)
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ import hmac
 import logging
 import os
 import re
-import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -42,7 +41,6 @@ logger = logging.getLogger(__name__)
 
 class ControlMode(Enum):
     """功率控制模式"""
-    SIMULATION = "simulation"   # 模擬模式：只記錄，不執行任何實際控制
     DRY_RUN = "dry_run"         # 乾跑模式：完整驗證流程但不執行
     PRODUCTION = "production"   # 生產模式：需要特殊授權才能啟用
 
@@ -59,11 +57,6 @@ class SafetyError(PowerControlError):
 
 class PowerLimitExceeded(PowerControlError):
     """功率超出限制"""
-    pass
-
-
-class SimulationModeRequired(SafetyError):
-    """需要模擬模式"""
     pass
 
 
@@ -94,7 +87,7 @@ class PowerLimits:
 @dataclass
 class PowerControlConfig:
     """功率控制配置"""
-    simulation_mode: bool = True  # 預設必須為 True
+    mode: str = "dry_run"  # "dry_run" or "production"
     limits: PowerLimits = field(default_factory=PowerLimits)
     require_confirmation: bool = True
     log_all_requests: bool = True
@@ -102,12 +95,10 @@ class PowerControlConfig:
     @classmethod
     def from_env(cls) -> "PowerControlConfig":
         """從環境變數創建配置"""
-        simulation_mode = os.getenv(
-            "POWER_CONTROL_SIMULATION", "true"
-        ).lower() == "true"
+        mode = os.getenv("POWER_CONTROL_MODE", "dry_run").lower()
         
         return cls(
-            simulation_mode=simulation_mode,
+            mode=mode,
             limits=PowerLimits(
                 max_charge_w=int(os.getenv("MAX_CHARGE_POWER_W", "100000")),
                 max_discharge_w=int(os.getenv("MAX_DISCHARGE_POWER_W", "100000")),
@@ -271,20 +262,17 @@ class SafePowerController:
     安全的功率控制器
     
     此類別提供安全的功率控制介面，確保：
-    1. 預設為模擬模式
+    1. 預設為 DRY_RUN 模式（驗證但不寫入）
     2. 所有請求都經過驗證
     3. 所有操作都記錄到審計日誌
     4. 生產模式需要特殊授權
     
     使用範例:
-        config = PowerControlConfig(simulation_mode=True)
+        config = PowerControlConfig(mode="dry_run")
         controller = SafePowerController(config)
         
-        # 設定功率（模擬模式下只會記錄）
+        # 設定功率（DRY_RUN 模式下驗證但不寫入）
         result = await controller.set_power_setpoint(50000)
-        
-        if result.simulated:
-            print("Power setpoint was simulated, not actually sent to PCS")
     """
     
     def __init__(
@@ -309,25 +297,16 @@ class SafePowerController:
         # 安全檢查：生產模式需要額外驗證
         if self._control_mode == ControlMode.PRODUCTION:
             self._verify_production_authorization()
-        elif self._control_mode == ControlMode.DRY_RUN:
-            logger.warning("SafePowerController initialized in DRY_RUN mode")
         else:
-            logger.info("SafePowerController initialized in SIMULATION mode")
+            logger.info(f"SafePowerController initialized in {self._control_mode.value} mode")
     
     def _resolve_control_mode(self) -> ControlMode:
         """根據配置解析控制模式"""
-        # 支援 runtime_config 的 mode 字串
-        mode_str = getattr(self.config, '_runtime_mode', None)
-        if mode_str == "dry_run":
-            return ControlMode.DRY_RUN
-        elif mode_str == "production":
+        # 支援 runtime_config 的 mode 字串 (附加屬性)
+        mode_str = getattr(self.config, '_runtime_mode', None) or self.config.mode
+        if mode_str == "production":
             return ControlMode.PRODUCTION
-        elif mode_str == "simulation":
-            return ControlMode.SIMULATION
-        # 向後相容: 使用舊的 simulation_mode 布林值
-        if self.config.simulation_mode:
-            return ControlMode.SIMULATION
-        return ControlMode.PRODUCTION
+        return ControlMode.DRY_RUN
     
     def _verify_production_authorization(self) -> None:
         """驗證生產模式授權"""
@@ -352,8 +331,8 @@ class SafePowerController:
     
     @property
     def simulation_mode(self) -> bool:
-        """是否為模擬模式"""
-        return self._control_mode == ControlMode.SIMULATION
+        """Whether in a non-production (safe) mode. True for DRY_RUN."""
+        return self._control_mode != ControlMode.PRODUCTION
     
     @property
     def control_mode(self) -> ControlMode:
@@ -417,24 +396,7 @@ class SafePowerController:
                 message="Validation failed"
             )
         
-        # 3. 模擬模式處理
-        if self.config.simulation_mode:
-            self._log_request(request_id, power_w, source, "simulated", [])
-            logger.info(
-                f"[SIMULATION] Power setpoint: {power_w}W "
-                f"({'charge' if power_w < 0 else 'discharge'})"
-            )
-            return PowerControlResult(
-                request_id=request_id,
-                mode=ControlMode.SIMULATION,
-                requested_power_w=power_w,
-                executed=False,
-                simulated=True,
-                timestamp=timestamp,
-                message=f"Simulated power setpoint: {power_w}W"
-            )
-        
-        # 4. DRY_RUN 模式：完整驗證 + 計算暫存器值，但不實際寫入
+        # 3. DRY_RUN 模式：完整驗證 + 計算暫存器值，但不實際寫入
         if self._control_mode == ControlMode.DRY_RUN:
             self._log_request(request_id, power_w, source, "dry_run", [])
             dry_run_msg = f"[DRY_RUN] Would set power to {power_w}W"
@@ -450,12 +412,12 @@ class SafePowerController:
                 mode=ControlMode.DRY_RUN,
                 requested_power_w=power_w,
                 executed=False,
-                simulated=False,
+                simulated=True,
                 timestamp=timestamp,
                 message=dry_run_msg
             )
         
-        # 5. 生產模式：透過 ModbusPowerWriter 實際寫入 PCS
+        # 4. 生產模式：透過 ModbusPowerWriter 實際寫入 PCS
         if self._pcs_writer:
             # Double-check: 縮小 TOCTOU 窗口
             if EmergencyStop.is_stopped():
@@ -471,8 +433,8 @@ class SafePowerController:
                 )
             self._log_request(request_id, power_w, source, "executing", [])
             try:
-                write_result = await self._pcs_writer.set_power(
-                    power_w=power_w, source=source
+                write_result = await self._pcs_writer.write_power_to_modbus(
+                    power_w
                 )
                 executed = write_result.success
                 msg = (
@@ -551,41 +513,6 @@ class SafePowerController:
         )
 
 
-def check_safety_environment() -> bool:
-    """
-    檢查安全環境變數
-    
-    在應用程式啟動時調用此函數以確保安全配置正確
-    
-    Returns:
-        True 如果是模擬模式, False 如果是生產模式
-    """
-    simulation_mode = os.getenv("POWER_CONTROL_SIMULATION", "true").lower()
-    
-    if simulation_mode != "true":
-        # 非模擬模式需要額外的安全確認
-        safety_token = os.getenv("POWER_CONTROL_SAFETY_TOKEN")
-        if not safety_token:
-            logger.error(
-                "Production mode requires POWER_CONTROL_SAFETY_TOKEN"
-            )
-            sys.exit(1)
-        
-        confirm = os.getenv("POWER_CONTROL_CONFIRM_PRODUCTION")
-        if confirm != "I_UNDERSTAND_THE_RISKS":
-            logger.error(
-                "Production mode requires explicit confirmation. "
-                "Set POWER_CONTROL_CONFIRM_PRODUCTION='I_UNDERSTAND_THE_RISKS'"
-            )
-            sys.exit(1)
-        
-        logger.warning("Running in PRODUCTION mode - PCS control is ENABLED")
-        return False
-    
-    logger.info("Running in SIMULATION mode - PCS control is DISABLED")
-    return True
-
-
 def create_power_controller_from_runtime(runtime_power_config) -> SafePowerController:
     """
     從 RuntimeConfig.power_control 創建 SafePowerController
@@ -610,9 +537,6 @@ def create_power_controller_from_runtime(runtime_power_config) -> SafePowerContr
         max_soc_percent=limits.max_soc_percent,
     )
     
-    # 決定 simulation_mode (向後相容)
-    is_simulation = (mode == RTPowerControlMode.SIMULATION.value)
-    
     # 如果是 production 模式，設定環境變數以通過授權檢查
     if mode == RTPowerControlMode.PRODUCTION.value:
         auth = runtime_power_config.production_auth
@@ -623,11 +547,9 @@ def create_power_controller_from_runtime(runtime_power_config) -> SafePowerContr
     
     # 構建 PowerControlConfig
     config = PowerControlConfig(
-        simulation_mode=is_simulation,
+        mode=mode,
         limits=power_limits,
     )
-    # 附加 runtime mode 字串供 _resolve_control_mode 使用
-    config._runtime_mode = mode
     
     controller = SafePowerController(config=config)
     
@@ -645,7 +567,6 @@ __all__ = [
     "PowerControlError",
     "SafetyError",
     "PowerLimitExceeded",
-    "SimulationModeRequired",
     "AuthorizationRequired",
     "PowerLimits",
     "PowerControlConfig",
@@ -653,6 +574,5 @@ __all__ = [
     "PowerValidator",
     "EmergencyStop",
     "SafePowerController",
-    "check_safety_environment",
     "create_power_controller_from_runtime",
 ]

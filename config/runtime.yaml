@@ -240,11 +240,10 @@ notification_server:
 # Controls how the client sends power setpoints to the PCS (Power Conversion System).
 # Reference: IEEE Std 2030.5-2023, DERControl.DERControlBase.opModFixedW
 power_control:
-  # Control mode: "simulation" | "dry_run" | "production"
-  #   simulation  - Log only, no Modbus writes (safe for development)
+  # Control mode: "dry_run" | "production"
   #   dry_run     - Full validation + register calculation, but no actual write
   #   production  - Actually write to PCS Modbus registers (requires auth)
-  mode: "simulation"
+  mode: "dry_run"
 
   # PCS Modbus TCP connection (may differ from BMS CUBE)
   pcs_modbus:

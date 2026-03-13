@@ -66,7 +66,7 @@ def power_controller(power_limits):
     EmergencyStop._timestamp = None
     
     config = PowerControlConfig(
-        simulation_mode=True,
+        mode="dry_run",
         limits=power_limits,
     )
     return SafePowerController(config)

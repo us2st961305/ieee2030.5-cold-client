@@ -162,8 +162,8 @@
 
     <div style="margin-top: 1rem; padding: 0.75rem; background: var(--bg-secondary); border-radius: 6px;">
         <div style="font-size: 0.85rem; color: var(--text-secondary);">
-            ⚠️ <strong>安全提示:</strong> 模擬模式下功率控制只會記錄，不會實際執行。
-            生產模式需要設定環境變數 <code>POWER_CONTROL_SIMULATION=false</code>
+            ⚠️ <strong>安全提示:</strong> DRY_RUN 模式下功率控制會完整驗證但不會實際寫入。
+            生產模式需要設定環境變數 <code>POWER_CONTROL_MODE=production</code> 與授權 token
         </div>
     </div>
     

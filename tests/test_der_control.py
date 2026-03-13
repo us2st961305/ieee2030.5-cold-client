@@ -66,7 +66,7 @@ def power_controller():
     """創建模擬模式的功率控制器"""
     return SafePowerController(
         PowerControlConfig(
-            simulation_mode=True,
+            mode="dry_run",
             limits=PowerLimits(
                 max_charge_w=100_000,
                 max_discharge_w=100_000,
@@ -402,29 +402,28 @@ class TestModbusPowerWriter:
     """測試 Modbus 功率寫入器"""
     
     @pytest.fixture
-    def power_writer(self, mock_modbus_client, power_controller):
+    def power_writer(self, mock_modbus_client):
         return ModbusPowerWriter(
             modbus_client=mock_modbus_client,
-            power_controller=power_controller,
         )
     
     @pytest.mark.asyncio
-    async def test_set_power_simulation_mode(self, power_writer):
-        """測試模擬模式設定功率"""
+    async def test_set_power_writes_to_modbus(self, power_writer):
+        """測試 set_power 直接寫入 Modbus"""
         result = await power_writer.set_power(50000)
         
         assert result.success is True
-        assert result.simulated is True
+        assert result.simulated is False
         assert result.requested_power_w == 50000
         assert power_writer.current_power_w == 50000
     
     @pytest.mark.asyncio
-    async def test_set_power_validation_failed(self, power_writer):
-        """測試功率驗證失敗"""
-        result = await power_writer.set_power(200000)  # 超出限制
+    async def test_set_power_large_value(self, power_writer):
+        """測試大功率值寫入（驗證由 SafePowerController 負責，writer 不攔截）"""
+        result = await power_writer.set_power(200000)
         
-        assert result.success is False
-        assert "exceeds limit" in result.error_message
+        assert result.success is True
+        assert result.requested_power_w == 200000
     
     @pytest.mark.asyncio
     async def test_stop(self, power_writer):
@@ -454,10 +453,9 @@ class TestPCSPowerAdapter:
     """測試 PCS 功率適配器"""
     
     @pytest.fixture
-    def pcs_adapter(self, mock_modbus_client, power_controller):
+    def pcs_adapter(self, mock_modbus_client):
         power_writer = ModbusPowerWriter(
             modbus_client=mock_modbus_client,
-            power_controller=power_controller,
         )
         return PCSPowerAdapter(power_writer)
     
@@ -474,7 +472,7 @@ class TestPCSPowerAdapter:
         result = await pcs_adapter.apply_der_control(control)
         
         assert result.success is True
-        assert result.simulated is True
+        assert result.simulated is False
         assert result.requested_power_w == 50000
     
     @pytest.mark.asyncio
@@ -545,12 +543,11 @@ class TestEndToEndSimulation:
     
     @pytest.mark.asyncio
     async def test_complete_flow_simulation(self, mock_modbus_client, power_controller):
-        """測試完整流程（模擬模式）"""
+        """測試完整流程（DRY_RUN 模式通過 handler，writer 直接寫 Modbus）"""
         # 1. 創建元件
         handler = DERControlHandler(power_controller)
         power_writer = ModbusPowerWriter(
             modbus_client=mock_modbus_client,
-            power_controller=power_controller,
         )
         pcs_adapter = PCSPowerAdapter(power_writer)
         
@@ -563,21 +560,18 @@ class TestEndToEndSimulation:
             )
         )
         
-        # 3. Handler 處理控制
+        # 3. Handler 處理控制（通過 SafePowerController DRY_RUN 模式）
         event = await handler.handle_control(control)
         
         assert event.status == DERControlEventStatus.COMPLETED
         assert event.result.simulated is True
         
-        # 4. 應用到 PCS（模擬）
+        # 4. 應用到 PCS（writer 直接寫入 mock）
         result = await pcs_adapter.apply_der_control(control)
         
         assert result.success is True
-        assert result.simulated is True
+        assert result.simulated is False
         assert result.requested_power_w == 75000
-        
-        # 5. 驗證 Modbus 沒有被實際調用
-        mock_modbus_client.write_register.assert_not_called()
     
     @pytest.mark.asyncio
     async def test_charging_flow_simulation(self, mock_modbus_client, power_controller):

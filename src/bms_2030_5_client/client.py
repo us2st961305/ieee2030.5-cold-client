@@ -787,11 +787,10 @@ class BMSClient:
                         verify_after_write=rt_pc.verify_after_write,
                     )
                     
-                    # Create power writer (uses its own SafePowerController internally
-                    # but we bypass that by calling set_power directly)
+                    # Create power writer (pure I/O layer, safety checks
+                    # are handled by SafePowerController)
                     power_writer = ModbusPowerWriter(
                         modbus_client=pcs_client_wrapper,
-                        power_controller=controller,
                         config=writer_config,
                     )
                     

@@ -567,7 +567,6 @@ class NotificationServerConfig:
 
 class PowerControlMode(str, Enum):
     """Power control operational mode."""
-    SIMULATION = "simulation"   # Log only, no Modbus writes
     DRY_RUN = "dry_run"         # Full validation, no actual write
     PRODUCTION = "production"   # Actually write to PCS
 
@@ -680,7 +679,7 @@ class ProductionAuthConfig:
 @dataclass
 class PowerControlConfig:
     """Complete power control configuration."""
-    mode: str = PowerControlMode.SIMULATION.value
+    mode: str = PowerControlMode.DRY_RUN.value
     pcs_modbus: PCSModbusConfig = field(default_factory=PCSModbusConfig)
     registers: PCSRegistersConfig = field(default_factory=PCSRegistersConfig)
     datatype: str = "uint16"
@@ -689,10 +688,6 @@ class PowerControlConfig:
     verify_after_write: bool = True
     limits: PowerLimitsConfig = field(default_factory=PowerLimitsConfig)
     production_auth: ProductionAuthConfig = field(default_factory=ProductionAuthConfig)
-
-    @property
-    def is_simulation(self) -> bool:
-        return self.mode == PowerControlMode.SIMULATION.value
 
     @property
     def is_dry_run(self) -> bool:
