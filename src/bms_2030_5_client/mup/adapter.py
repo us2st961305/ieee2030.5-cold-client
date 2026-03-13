@@ -86,6 +86,7 @@ class MirrorUsagePointAdapter:
         description: str = "BMS Battery Storage Meter",
         post_rate: int = 60,
         include_readings: bool = False,
+        mup_mrid: str | None = None,
     ) -> MirrorUsagePoint:
         """
         Create a MirrorUsagePoint for the BMS system.
@@ -103,6 +104,9 @@ class MirrorUsagePointAdapter:
             description: Description of the meter
             post_rate: Posting rate in seconds
             include_readings: Whether to include MirrorMeterReading
+            mup_mrid: Persisted mRID from database; if provided, reuse
+                instead of generating a new one (IEEE 2030.5 Section
+                10.11.3(a)(4) – server returns same URI for matching mRID).
             
         Returns:
             MirrorUsagePoint ready to register with server
@@ -123,7 +127,7 @@ class MirrorUsagePointAdapter:
             ]
         
         mup = MirrorUsagePoint(
-            mRID=self._generate_mrid(),
+            mRID=mup_mrid or self._generate_mrid(),
             description=description,
             version=1,
             roleFlags=f"{(int(RoleFlagsType.IS_MIRROR) | int(RoleFlagsType.IS_DER)):04X}",  # HexBinary16

@@ -141,6 +141,7 @@ class BMSClient:
         self._edev_href: Optional[str] = None  # EndDevice href (e.g., /edev/97)
         self._der_path: Optional[str] = None
         self._mup_href: Optional[str] = None  # MirrorUsagePoint href
+        self._mup_mrid: Optional[str] = None  # MirrorUsagePoint mRID (persisted)
         self._reading_mrids: Dict[str, str] = {}  # Cached reading mRIDs
         self._callbacks: List[Callable] = []
         
@@ -391,7 +392,8 @@ class BMSClient:
                 mups = self._db.get_mirror_usage_points_by_lfdi(self.ieee2030_5_client.lfdi or "")
                 if mups:
                     self._mup_href = mups[0].href
-                    logger.info(f"[Fast Recovery] Loaded cached MirrorUsagePoint: {self._mup_href}")
+                    self._mup_mrid = mups[0].mrid
+                    logger.info(f"[Fast Recovery] Loaded cached MirrorUsagePoint: {self._mup_href} (mRID={self._mup_mrid})")
                     
                     # Load cached MirrorMeterReading mRIDs
                     readings = self._db.get_readings_by_mup(self._mup_href)
@@ -1189,32 +1191,39 @@ class BMSClient:
                     return
                 else:
                     logger.info("[Fast Recovery] MirrorUsagePoint not found on server (404), re-registering...")
-                    # Clear old cache from database
+                    # Clear href/cache but KEEP mRID for re-registration
+                    # (IEEE 2030.5 Section 10.11.3(a)(4): server returns same URI for matching mRID)
                     if self._db:
                         self._db.delete_mirror_usage_point(self._mup_href)
                         logger.info(f"[Fast Recovery] Cleared stale MUP cache from database: {self._mup_href}")
                     self._mup_href = None
                     self._reading_mrids.clear()
+                    # _mup_mrid is intentionally preserved
             except Exception as e:
                 logger.info(f"[Fast Recovery] Could not verify cached MirrorUsagePoint: {e}, re-registering...")
                 self._mup_href = None
                 self._reading_mrids.clear()
+                # _mup_mrid is intentionally preserved
         
         logger.info("[Full Registration] Creating new MirrorUsagePoint (meter)...")
         
         try:
             # Step 1: Create MirrorUsagePoint WITHOUT MirrorMeterReading
+            # Reuse persisted mRID so server can match existing resource
+            # (IEEE 2030.5 Section 10.11.3(a)(4): same mRID → 204 + same URI)
             mup = self.adapter.create_bms_mirror_usage_point(
                 device_lfdi=self.ieee2030_5_client.lfdi,
                 description="CUBE BMS Meter",
                 post_rate=self.config.ieee2030_5.poll_rate,
                 include_readings=False,  # Don't include readings for initial POST
+                mup_mrid=self._mup_mrid,
             )
             
             # Register with server (POST)
             _, location = await self.ieee2030_5_client.create_mirror_usage_point(mup)
             self._mup_href = location
-            logger.info(f"Created MirrorUsagePoint at: {self._mup_href}")
+            self._mup_mrid = mup.mRID  # Persist the mRID used for this registration
+            logger.info(f"Created MirrorUsagePoint at: {self._mup_href} (mRID={self._mup_mrid})")
             
             # Step 2: POST all MirrorMeterReading using MirrorMeterReadingList
             # Get the readings from adapter
@@ -1223,6 +1232,7 @@ class BMSClient:
                 description="CUBE BMS Meter",
                 post_rate=self.config.ieee2030_5.poll_rate,
                 include_readings=True,
+                mup_mrid=self._mup_mrid,
             )
             
             # POST all readings as a list

@@ -278,6 +278,7 @@ class BMSAdapter:
         description: str = "BMS Battery Storage Meter",
         post_rate: int = 60,
         include_readings: bool = False,
+        mup_mrid: str | None = None,
     ) -> MirrorUsagePoint:
         """
         Create a MirrorUsagePoint for the BMS system.
@@ -289,6 +290,7 @@ class BMSAdapter:
             description: Description of the meter
             post_rate: Posting rate in seconds
             include_readings: Whether to include MirrorMeterReading
+            mup_mrid: Persisted mRID to reuse across restarts
             
         Returns:
             MirrorUsagePoint ready to register with server
@@ -298,6 +300,7 @@ class BMSAdapter:
             description=description,
             post_rate=post_rate,
             include_readings=include_readings,
+            mup_mrid=mup_mrid,
         )
 
     def snapshot_to_meter_readings(
