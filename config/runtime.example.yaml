@@ -1,7 +1,10 @@
 # ========================================
 # IEEE 2030.5 BMS Client - Example Configuration
 # ========================================
-# Copy this file to runtime.yaml and customize for your environment.
+# Copy this file to runtime.yaml and customize for your environment:
+#   cp config/runtime.example.yaml config/runtime.yaml
+#
+# ⚠️  runtime.yaml is git-ignored — keep secrets only in runtime.yaml.
 #
 # Schema Version: 2.0.0
 # Reference: IEEE Std 2030.5™-2023
@@ -9,19 +12,21 @@
 # ----------------------------------------
 # PROFILES: IEEE 2030.5 Server Connections
 # ----------------------------------------
+# Define one or more server profiles for connecting to IEEE 2030.5 servers.
+# Each profile represents a unique server endpoint with its own TLS credentials.
 profiles:
   # Production server
   - name: "production"
     server_base_url: "https://sep.utility.example.com"
     tls:
-      client_cert_path: "certs/prod/client.crt"
-      client_key_path: "certs/prod/client.key"
-      ca_bundle_path: "certs/prod/ca-bundle.crt"
+      client_cert_path: "certs/client.crt"
+      client_key_path: "certs/client.key"
+      ca_bundle_path: "certs/ca.crt"
       verify_server: true
     content_type_preference: "application/sep+xml"
     device_id: "BESS-001"
     pin: 12345
-  
+
   # Development/Test server
   - name: "development"
     server_base_url: "https://localhost:7443"
@@ -38,79 +43,106 @@ profiles:
 # MODBUS: BMS Communication Settings
 # ----------------------------------------
 modbus:
+  # Connection mode: "tcp" or "rtu" (rtu not yet implemented)
   mode: "tcp"
+
+  # TCP connection settings
   host: "192.168.1.100"
   port: 502
   unit_id: 1
-  timeout: 5.0
-  
+  timeout: 5.0  # seconds
+
+  # Default function codes
   defaults:
-    function_code_read: 3
-    function_code_write: 6
-  
+    function_code_read: 3    # 0x03 Read Holding Registers
+    function_code_write: 6   # 0x06 Write Single Register
+
+  # Rack configuration (CUBE BMS specific)
   rack_count: 4
-  
+
+  # Register address configuration
+  # NOTE: Documentation addresses need -1 offset for actual Modbus communication
+  # Doc 4000 -> Actual 3999, Doc 7000 -> Actual 6999
   registers:
     system:
-      base_address: 3999  # Doc: 4000
+      base_address: 3999      # Doc: 4000
       count: 100
     rack:
-      base_address: 6999  # Doc: 7000
-      offset: 30
+      base_address: 6999      # Doc: 7000
+      offset: 30              # Registers per rack
       max_racks: 24
 
 # ----------------------------------------
 # POLL_TARGETS: Polling Configuration
 # ----------------------------------------
+# Define resources to poll from IEEE 2030.5 server.
+# Each target specifies what to fetch, how to parse it, and where to write via Modbus.
 poll_targets:
   # Poll Target 1: DER Control (Power Setpoint)
   # Fetches active power commands from the utility server
-  - id: "der_control_power"
-    name: "DER Active Power Control"
+  - id: "der_control_poll"
+    name: "DER Control Power Setpoint"
     enabled: true
     profile_name: "production"
     method: "GET"
     uri: "/edev/{edev}/der/1/derg/1/derp/1/derca"
-    interval_ms: 30000  # 30 seconds - responsive to grid commands
+    interval_ms: 60000  # 1 minute
     parse:
       format: "sep_xml"
       xpath: "//DERControl/DERControlBase/opModFixedW/value"
     transform:
-      scale: 0.001      # Convert from milliwatts to watts
+      scale: 1.0
       offset: 0
-      clamp_min: -100000  # -100 kW (discharge limit)
-      clamp_max: 100000   # +100 kW (charge limit)
+      clamp_min: null
+      clamp_max: null
     modbus_write:
-      address: 4100     # Power setpoint register
+      address: 4100
       datatype: "int16"
-      scale: 0.1        # Register uses 0.1 kW units
+      scale: 0.1
       offset: 0
 
   # Poll Target 2: Time Synchronization
   # Mandatory per IEEE 2030.5 - keeps client time in sync
   - id: "time_sync"
-    name: "Server Time Synchronization"
+    name: "Time Synchronization"
     enabled: true
     profile_name: "production"
     method: "GET"
     uri: "/tm"
-    interval_ms: 900000  # 15 minutes (IEEE 2030.5 requirement)
+    interval_ms: 900000  # 15 minutes (mandatory per IEEE 2030.5)
     parse:
       format: "sep_xml"
       xpath: "//Time/currentTime"
     transform:
       scale: 1.0
       offset: 0
-    # No modbus_write - internal use only
+    # No modbus_write - just for internal time sync
+
+  # Poll Target 3: DER Capability
+  - id: "der_capability"
+    name: "DER Capability"
+    enabled: true
+    profile_name: "production"
+    method: "GET"
+    uri: "/edev/{edev}/der/1/dercap"
+    interval_ms: 3600000  # 1 hour
+    parse:
+      format: "sep_xml"
+      field_path: "DERCapability"
+    transform:
+      scale: 1.0
+      offset: 0
 
 # ----------------------------------------
 # SUBSCRIPTIONS: Push-based Notifications
 # ----------------------------------------
+# Define subscriptions to receive real-time updates from the server.
+# Requires notification_server to be enabled.
+# Reference: IEEE Std 2030.5-2023, Clause 8.9
 subscriptions:
   # Subscription 1: Real-time DER Control Updates
-  # Receives immediate notifications when power commands change
-  - id: "der_control_realtime"
-    name: "DER Control Real-time Notifications"
+  - id: "der_control_sub"
+    name: "DER Control Subscription"
     enabled: true
     profile_name: "production"
     resource_uri: "/edev/{edev}/der/1/derg/1/derp/1/derca"
@@ -129,38 +161,112 @@ subscriptions:
       scale: 0.1
       offset: 0
 
+  # Subscription 2: DER Program Updates
+  - id: "der_program_sub"
+    name: "DER Program Subscription"
+    enabled: false
+    profile_name: "production"
+    resource_uri: "/edev/{edev}/der/1/derg/1/derp"
+    notification_endpoint: "https://bess-client.example.com:8443/notify"
+    conditions: null
+    renew_interval_hours: 24
+    parse:
+      format: "sep_xml"
+      field_path: "DERProgram"
+
 # ----------------------------------------
 # NOTIFICATION_SERVER: Client-side TLS Server
 # ----------------------------------------
+# The client must run a TLS server to receive secure notifications.
+# Reference: IEEE Std 2030.5-2023 - Client must support TLS as server for notifications
 notification_server:
   enabled: true
+
+  # Listen address and port
   listen_host: "0.0.0.0"
   listen_port: 8443
-  
-  # TLS is required for IEEE 2030.5 secure notifications
+
+  # TLS Server Configuration
+  # Required for secure notifications (IEEE 2030.5 mandates TLS)
   tls_server_enabled: true
   tls_server_cert_path: "certs/notification/server.crt"
   tls_server_key_path: "certs/notification/server.key"
-  
-  # Mutual TLS (optional but recommended)
+
+  # Optional: Require client certificate from IEEE 2030.5 server
   tls_require_client_cert: false
   tls_client_ca_path: "certs/notification/utility-ca.crt"
-  
+
+  # Notification endpoint path
   endpoint_path: "/notify"
-  
+
   # Public URI - must be reachable by the IEEE 2030.5 server
-  # Options:
-  #   - Direct public IP: https://203.0.113.50:8443
-  #   - DNS hostname: https://bess-client.example.com:8443
-  #   - Tailscale Funnel: https://hostname.tailnet.ts.net
-  #   - ngrok tunnel: https://random-id.ngrok.io
+  # Options: direct IP, DNS, Tailscale Funnel, ngrok, etc.
   public_uri: "https://bess-client.example.com:8443"
+
+# ----------------------------------------
+# POWER_CONTROL: PCS Control Configuration
+# ----------------------------------------
+# Controls how the client sends power setpoints to the PCS (Power Conversion System).
+# Reference: IEEE Std 2030.5-2023, DERControl.DERControlBase.opModFixedW
+power_control:
+  # Control mode: "dry_run" | "production"
+  #   dry_run     - Full validation + register calculation, but no actual write
+  #   production  - Actually write to PCS Modbus registers (requires auth)
+  mode: "dry_run"
+
+  # PCS Modbus TCP connection (may differ from BMS CUBE)
+  pcs_modbus:
+    host: "192.168.1.200"
+    port: 502
+    unit_id: 1
+    timeout: 5.0
+
+  # PCS register addresses (per PCS manual)
+  registers:
+    power_setpoint: 40001       # 功率設定點 (W or scaled)
+    power_setpoint_high: 40002  # 高位元 (32-bit mode only)
+    operation_mode: 40010       # 運行模式
+    enable_control: 40011       # 啟用控制
+    actual_power: 40100         # 實際功率回讀
+    operation_status: 40101     # 運行狀態
+    error_code: 40102           # 錯誤碼
+
+  # Power value format
+  datatype: "uint16"            # U16 register format
+  power_scale_factor: 1.0       # 1.0 = W, 0.1 = 0.1kW
+  use_32bit: false              # true = write to two registers
+  verify_after_write: true      # read-back verification after write
+
+  # Safety limits (enforced in ALL modes including production)
+  limits:
+    max_charge_w: 100000        # 最大充電功率 (W)
+    max_discharge_w: 100000     # 最大放電功率 (W)
+    ramp_rate_w_per_s: 50000    # 最大變化速率 (W/s)
+    min_soc_percent: 10.0       # SOC 下限
+    max_soc_percent: 90.0       # SOC 上限
+
+  # Production mode authorization (required when mode=production)
+  # Step 1: Set a strong safety_token here
+  # Step 2: Run CLI to unlock: bms-unlock-production --config config/runtime.yaml
+  # Step 3: Restart the service — SafePowerController will verify the lockfile
+  # Revoke: bms-unlock-production --revoke
+  production_auth:
+    # Secret token used to sign the production lockfile (keep this secure)
+    safety_token: ""
+    # Legacy field (ignored) — use CLI unlock instead
+    confirm_production: false
 
 # ----------------------------------------
 # LOGGING: Log Configuration
 # ----------------------------------------
 logging:
-  level: "INFO"
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   file: "logs/bms_client.log"
+
+  # Log rotation settings
+  max_bytes: 10485760        # 10 MB per log file
+  backup_count: 5            # keep 5 rotated files
+
+  # Web UI log buffer size
   buffer_size: 500

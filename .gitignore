@@ -4,6 +4,7 @@ certs/
 .venv/
 .coverage
 config/config.yaml
+config/runtime.yaml
 data/
 
 # Ignore binary garbage files (in case of corrupted output)
