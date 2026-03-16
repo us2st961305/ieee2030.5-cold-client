@@ -17,7 +17,6 @@ Power Control Safety Module (功率控制安全模組)
 
 from __future__ import annotations
 
-import hmac
 import logging
 import os
 import re
@@ -233,23 +232,30 @@ class EmergencyStop:
             }
     
     @classmethod
-    def reset(cls, authorization_token: str) -> bool:
+    def reset_by_server(cls, source: str) -> bool:
         """
-        重置緊急停止狀態
-        
-        需要有效的授權 token
+        Reset emergency stop via IEEE 2030.5 server command.
+
+        Only called by DERControlHandler when the EMS server sends a recovery
+        command (opModConnect=true, opModEnergize=true, event cancellation, or
+        DefaultDERControl fallback). No token required — authorization is
+        implicit in receiving a valid server control event.
+
+        Args:
+            source: Identifier of the server command that triggered the reset
+                    (e.g. "opModConnect=true:evt-123").
+
+        Returns:
+            True if the state was reset, False if it was not in stopped state.
         """
-        expected_token = os.getenv("POWER_CONTROL_SAFETY_TOKEN")
-        if not expected_token or not hmac.compare_digest(
-            authorization_token.encode(), expected_token.encode()
-        ):
-            power_audit_logger.warning("Failed emergency stop reset: invalid token")
-            return False
-        
         with cls._lock:
+            if not cls._stopped:
+                return False
             safe_reason = _LOG_SANITIZE_RE.sub("", cls._reason or "")[:200]
+            safe_source = _LOG_SANITIZE_RE.sub("", source)[:200]
             power_audit_logger.warning(
-                f"EMERGENCY_STOP_RESET | previous_reason={safe_reason}"
+                f"EMERGENCY_STOP_RESET | source={safe_source} | "
+                f"previous_reason={safe_reason}"
             )
             cls._stopped = False
             cls._reason = None
@@ -435,6 +441,95 @@ class SafePowerController:
         else:
             self._log_request(request_id, 0, source, "no_writer", [])
             logger.warning("[PRODUCTION] No PCS writer configured, disconnect not sent")
+            return PowerControlResult(
+                request_id=request_id,
+                mode=ControlMode.PRODUCTION,
+                requested_power_w=0,
+                executed=False,
+                simulated=False,
+                timestamp=timestamp,
+                message="Production mode: No PCS writer configured",
+            )
+    
+    async def reconnect_pcs(self, source: str = "opModConnect=true") -> PowerControlResult:
+        """
+        Reconnect PCS: restore OPERATION_MODE to REMOTE.
+
+        Inverse of disconnect_pcs(). Does NOT set a power setpoint — only
+        restores the PCS operation mode so subsequent power commands can be
+        accepted.  Corresponds to IEEE 2030.5 DERControlBase.opModConnect=true.
+
+        Args:
+            source: Request origin identifier.
+
+        Returns:
+            PowerControlResult
+        """
+        request_id = str(uuid4())[:8]
+        timestamp = datetime.now(timezone.utc)
+
+        # DRY_RUN mode
+        if self._control_mode == ControlMode.DRY_RUN:
+            self._log_request(request_id, 0, source, "dry_run", [])
+            msg = "[DRY_RUN] Would reconnect PCS: OPERATION_MODE=REMOTE"
+            logger.info(msg)
+            return PowerControlResult(
+                request_id=request_id,
+                mode=ControlMode.DRY_RUN,
+                requested_power_w=0,
+                executed=False,
+                simulated=True,
+                timestamp=timestamp,
+                message=msg,
+            )
+
+        # PRODUCTION mode
+        if self._pcs_writer:
+            self._log_request(request_id, 0, source, "executing", [])
+            try:
+                write_result = await self._pcs_writer.reconnect(reason=source)
+                executed = write_result.success
+                msg = (
+                    f"[PRODUCTION] PCS reconnect "
+                    f"{'completed' if executed else 'FAILED'}"
+                )
+                if write_result.error_message:
+                    msg += f" - {write_result.error_message}"
+                self._log_request(
+                    request_id, 0, source,
+                    "executed" if executed else "write_failed",
+                    [write_result.error_message] if write_result.error_message else [],
+                )
+                return PowerControlResult(
+                    request_id=request_id,
+                    mode=ControlMode.PRODUCTION,
+                    requested_power_w=0,
+                    executed=executed,
+                    simulated=False,
+                    timestamp=timestamp,
+                    errors=(
+                        [write_result.error_message]
+                        if write_result.error_message and not executed
+                        else []
+                    ),
+                    message=msg,
+                )
+            except Exception as e:
+                logger.exception(f"PCS reconnect error: {e}")
+                self._log_request(request_id, 0, source, "error", [str(e)])
+                return PowerControlResult(
+                    request_id=request_id,
+                    mode=ControlMode.PRODUCTION,
+                    requested_power_w=0,
+                    executed=False,
+                    simulated=False,
+                    timestamp=timestamp,
+                    errors=[str(e)],
+                    message=f"PCS reconnect error: {e}",
+                )
+        else:
+            self._log_request(request_id, 0, source, "no_writer", [])
+            logger.warning("[PRODUCTION] No PCS writer configured, reconnect not sent")
             return PowerControlResult(
                 request_id=request_id,
                 mode=ControlMode.PRODUCTION,

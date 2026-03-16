@@ -611,3 +611,167 @@ class TestEndToEndSimulation:
         
         # Modbus 不應該被調用
         mock_modbus_client.write_register.assert_not_called()
+
+
+# =============================================================================
+# IEEE 2030.5 Recovery Mechanism Tests
+# =============================================================================
+
+class TestIEEE2030_5Recovery:
+    """Test IEEE 2030.5 recovery mechanisms (opModConnect=true, opModEnergize=true,
+    event cancellation, DefaultDERControl fallback)."""
+
+    @pytest.mark.asyncio
+    async def test_opmod_connect_true_clears_emergency_stop(self, der_control_handler):
+        """opModConnect=true should reset EmergencyStop and reconnect PCS."""
+        EmergencyStop.trigger("fault")
+        assert EmergencyStop.is_stopped() is True
+
+        control = DERControl(
+            mRID="recovery001",
+            DERControlBase=DERControlBase(opModConnect=True),
+        )
+        event = await der_control_handler.handle_control(control)
+
+        assert event.status == DERControlEventStatus.COMPLETED
+        assert EmergencyStop.is_stopped() is False
+
+    @pytest.mark.asyncio
+    async def test_opmod_connect_true_without_prior_stop(self, der_control_handler):
+        """opModConnect=true should succeed even if EmergencyStop was not active."""
+        control = DERControl(
+            mRID="recovery002",
+            DERControlBase=DERControlBase(opModConnect=True),
+        )
+        event = await der_control_handler.handle_control(control)
+
+        assert event.status == DERControlEventStatus.COMPLETED
+        assert EmergencyStop.is_stopped() is False
+
+    @pytest.mark.asyncio
+    async def test_opmod_energize_true_clears_emergency_stop(self, der_control_handler):
+        """opModEnergize=true should reset EmergencyStop (no PCS mode change)."""
+        EmergencyStop.trigger("de-energize fault")
+        assert EmergencyStop.is_stopped() is True
+
+        control = DERControl(
+            mRID="recovery003",
+            DERControlBase=DERControlBase(opModEnergize=True),
+        )
+        event = await der_control_handler.handle_control(control)
+
+        assert event.status == DERControlEventStatus.COMPLETED
+        assert EmergencyStop.is_stopped() is False
+
+    @pytest.mark.asyncio
+    async def test_opmod_energize_true_without_prior_stop(self, der_control_handler):
+        """opModEnergize=true should succeed even without active EmergencyStop."""
+        control = DERControl(
+            mRID="recovery004",
+            DERControlBase=DERControlBase(opModEnergize=True),
+        )
+        event = await der_control_handler.handle_control(control)
+
+        assert event.status == DERControlEventStatus.COMPLETED
+
+    @pytest.mark.asyncio
+    async def test_emergency_stop_blocks_normal_but_not_recovery(self, der_control_handler):
+        """Normal power commands are blocked by EmergencyStop, but recovery
+        commands (opModConnect=true) bypass the gate."""
+        EmergencyStop.trigger("fault")
+
+        # Normal power command is blocked
+        blocked_control = DERControl(
+            mRID="blocked001",
+            DERControlBase=DERControlBase(
+                opModFixedW=SignedPerCent(value=50000, multiplier=0)
+            ),
+        )
+        blocked_evt = await der_control_handler.handle_control(blocked_control)
+        assert blocked_evt.status == DERControlEventStatus.FAILED
+
+        # Recovery command succeeds
+        recovery = DERControl(
+            mRID="recovery005",
+            DERControlBase=DERControlBase(opModConnect=True),
+        )
+        recovery_evt = await der_control_handler.handle_control(recovery)
+        assert recovery_evt.status == DERControlEventStatus.COMPLETED
+        assert EmergencyStop.is_stopped() is False
+
+    @pytest.mark.asyncio
+    async def test_cancel_disconnect_triggers_reconnect(self, der_control_handler):
+        """Cancelling an active disconnect event should trigger reconnect + reset."""
+        # First, execute a disconnect control
+        disconnect = DERControl(
+            mRID="disc001",
+            DERControlBase=DERControlBase(opModConnect=False),
+        )
+        event = await der_control_handler.handle_control(disconnect)
+        assert event.status == DERControlEventStatus.COMPLETED
+        assert der_control_handler.active_control == event
+
+        # Cancel it
+        result = await der_control_handler.cancel_control("disc001")
+        assert result is True
+        assert der_control_handler.active_control is None
+
+    @pytest.mark.asyncio
+    async def test_cancel_normal_event_does_not_reconnect(self, der_control_handler):
+        """Cancelling a normal power event should set power to 0, not reconnect."""
+        control = DERControl(
+            mRID="norm001",
+            DERControlBase=DERControlBase(
+                opModFixedW=SignedPerCent(value=50000, multiplier=0)
+            ),
+        )
+        event = await der_control_handler.handle_control(control)
+        assert event.status == DERControlEventStatus.COMPLETED
+
+        result = await der_control_handler.cancel_control("norm001")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_default_der_control_fallback_on_cancel(self, der_control_handler):
+        """After cancelling the active event, DefaultDERControl should be applied."""
+        # Set a DefaultDERControl
+        default_ctrl = DERControl(
+            mRID="default001",
+            DERControlBase=DERControlBase(
+                opModFixedW=SignedPerCent(value=10000, multiplier=0)
+            ),
+        )
+        der_control_handler.set_default_der_control(default_ctrl)
+
+        # Execute a normal control
+        control = DERControl(
+            mRID="active001",
+            DERControlBase=DERControlBase(
+                opModFixedW=SignedPerCent(value=50000, multiplier=0)
+            ),
+        )
+        await der_control_handler.handle_control(control)
+
+        # Cancel the active control — should fall back to default
+        await der_control_handler.cancel_control("active001")
+
+        # The default should now be the active control
+        active = der_control_handler.active_control
+        assert active is not None
+        assert active.control.mRID == "default001"
+        assert active.status == DERControlEventStatus.COMPLETED
+
+    @pytest.mark.asyncio
+    async def test_set_and_clear_default_der_control(self, der_control_handler):
+        """Test set/clear DefaultDERControl."""
+        default_ctrl = DERControl(
+            mRID="default002",
+            DERControlBase=DERControlBase(
+                opModFixedW=SignedPerCent(value=5000, multiplier=0)
+            ),
+        )
+        der_control_handler.set_default_der_control(default_ctrl)
+        assert der_control_handler._default_der_control is not None
+
+        der_control_handler.set_default_der_control(None)
+        assert der_control_handler._default_der_control is None

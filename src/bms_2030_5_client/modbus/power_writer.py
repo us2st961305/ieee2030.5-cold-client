@@ -393,6 +393,68 @@ class ModbusPowerWriter:
         
         return power_result
     
+    async def reconnect(self, reason: str = "opModConnect=true") -> PowerWriteResult:
+        """
+        Reconnect PCS: restore OPERATION_MODE to REMOTE.
+
+        Inverse of disconnect(). Does NOT write a power setpoint — only
+        switches the PCS mode back to REMOTE so subsequent power commands are
+        accepted.  Corresponds to IEEE 2030.5 DERControlBase.opModConnect=true.
+
+        Steps:
+        1. OPERATION_MODE → REMOTE(4)
+        2. Audit log entry
+
+        Args:
+            reason: Reconnect reason description.
+
+        Returns:
+            PowerWriteResult
+        """
+        power_audit_logger.warning(
+            f"RECONNECT | reason={reason} | "
+            f"timestamp={datetime.now(timezone.utc).isoformat()}"
+        )
+
+        try:
+            mode_success = await self.modbus_client.write_register(
+                PCSRegisterAddress.OPERATION_MODE,
+                PCSOperationMode.REMOTE.value,
+            )
+            if mode_success:
+                power_audit_logger.info(
+                    f"RECONNECT_MODE_SET | "
+                    f"register={PCSRegisterAddress.OPERATION_MODE} | "
+                    f"value={PCSOperationMode.REMOTE.value} (REMOTE)"
+                )
+                return PowerWriteResult(
+                    success=True,
+                    simulated=False,
+                    requested_power_w=0,
+                    timestamp=datetime.now(timezone.utc),
+                )
+            else:
+                power_audit_logger.error(
+                    f"RECONNECT_MODE_FAILED | "
+                    f"register={PCSRegisterAddress.OPERATION_MODE}"
+                )
+                return PowerWriteResult(
+                    success=False,
+                    simulated=False,
+                    requested_power_w=0,
+                    timestamp=datetime.now(timezone.utc),
+                    error_message="Failed to set OPERATION_MODE to REMOTE",
+                )
+        except Exception as e:
+            power_audit_logger.error(f"RECONNECT_MODE_ERROR | error={e}")
+            return PowerWriteResult(
+                success=False,
+                simulated=False,
+                requested_power_w=0,
+                timestamp=datetime.now(timezone.utc),
+                error_message=f"OPERATION_MODE write error: {e}",
+            )
+    
     async def emergency_stop(self, reason: str) -> PowerWriteResult:
         """
         緊急停止

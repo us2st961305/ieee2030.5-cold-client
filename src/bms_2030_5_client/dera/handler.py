@@ -149,6 +149,9 @@ class DERControlHandler:
             Callable[[DERControlEvent], Awaitable[None]]
         ] = None
         
+        # DefaultDERControl fallback (Section 10.10)
+        self._default_der_control: Optional[DERControl] = None
+        
         logger.info(
             f"DERControlHandler initialized "
             f"(control_mode={power_controller.control_mode.value})"
@@ -170,6 +173,69 @@ class DERControlHandler:
     ) -> None:
         """設定控制執行完成的回調函數"""
         self._on_control_executed = callback
+    
+    def set_default_der_control(self, control: DERControl | None) -> None:
+        """
+        Set the DefaultDERControl for fallback (IEEE 2030.5 Section 10.10).
+
+        When the active event is cancelled and no other event replaces it,
+        this default control is applied automatically.
+
+        Args:
+            control: DefaultDERControl, or None to clear.
+        """
+        self._default_der_control = control
+        if control:
+            logger.info("DefaultDERControl set for fallback")
+        else:
+            logger.info("DefaultDERControl cleared")
+    
+    def _supersede_and_set_active(self, event: DERControlEvent) -> None:
+        """Supersede current active event and set the new one."""
+        if self._active_event and self._active_event.event_id != event.event_id:
+            if self._active_event.status in (
+                DERControlEventStatus.ACTIVE,
+                DERControlEventStatus.COMPLETED,
+            ):
+                self._active_event.status = DERControlEventStatus.SUPERSEDED
+                logger.info(
+                    f"DERControl superseded: "
+                    f"{self._active_event.event_id} -> {event.event_id}"
+                )
+        self._active_event = event
+    
+    async def _fire_callback(self, event: DERControlEvent) -> None:
+        """Fire the on_control_executed callback if set."""
+        if self._on_control_executed:
+            try:
+                await self._on_control_executed(event)
+            except Exception as e:
+                logger.exception(f"Control executed callback error: {e}")
+    
+    @staticmethod
+    def _event_is_disconnect_or_deenergize(event: DERControlEvent) -> bool:
+        """Check if an event was a disconnect or de-energize command."""
+        if event.control.DERControlBase:
+            base = event.control.DERControlBase
+            if base.opModConnect is False or base.opModEnergize is False:
+                return True
+        return False
+    
+    async def _apply_default_control(self, source: str) -> None:
+        """
+        Apply the DefaultDERControl as fallback.
+
+        Called when the active event is cancelled/expired and no replacement
+        event is queued.  Per IEEE 2030.5 Section 10.10, the device reverts
+        to DefaultDERControl when no higher-priority control is active.
+        """
+        if self._default_der_control is None:
+            return
+        
+        logger.info(f"Applying DefaultDERControl fallback ({source})")
+        event = DERControlEvent(control=self._default_der_control)
+        await self._execute_control(event, source)
+        self._events[event.event_id] = event
     
     async def handle_control(
         self,
@@ -254,22 +320,85 @@ class DERControlHandler:
         source: str
     ) -> None:
         """
-        執行控制事件
-        
-        ⚠️ 透過 SafePowerController 執行，確保安全
+        Execute a DERControl event.
+
+        ⚠️ All power operations go through SafePowerController.
+
+        Recovery commands (opModConnect=true, opModEnergize=true) are
+        evaluated BEFORE the EmergencyStop gate so the server can lift an
+        emergency stop via IEEE 2030.5 control events.
         """
         event.status = DERControlEventStatus.ACTIVE
         event.executed_time = int(time.time())
         
-        # 檢查緊急停止
+        # --- Recovery / connect / energize commands (bypass EmergencyStop) ---
+        control = event.control
+        if control.DERControlBase:
+            base = control.DERControlBase
+            
+            # opModConnect=true: reset EmergencyStop + reconnect PCS
+            if base.opModConnect is True:
+                reset_source = f"{source}:opModConnect=true:{event.event_id}"
+                was_stopped = EmergencyStop.is_stopped()
+                if was_stopped:
+                    EmergencyStop.reset_by_server(reset_source)
+                logger.info(
+                    f"DERControl {event.event_id}: opModConnect=true, "
+                    f"reconnecting PCS (OPERATION_MODE=REMOTE)"
+                    f"{' [EmergencyStop cleared]' if was_stopped else ''}"
+                )
+                source = f"{source}:reconnect"
+                try:
+                    result = await self.power_controller.reconnect_pcs(
+                        source=source
+                    )
+                    event.result = result
+                    if result.success:
+                        event.status = DERControlEventStatus.COMPLETED
+                        logger.info(
+                            f"DERControl {event.event_id}: reconnect executed "
+                            f"(simulated={result.simulated})"
+                        )
+                    else:
+                        event.status = DERControlEventStatus.FAILED
+                        event.error_message = "; ".join(result.errors)
+                        logger.error(
+                            f"DERControl reconnect failed: {event.event_id}, "
+                            f"errors={result.errors}"
+                        )
+                except Exception as e:
+                    event.status = DERControlEventStatus.FAILED
+                    event.error_message = str(e)
+                    logger.exception(f"DERControl reconnect error: {event.event_id}")
+                
+                self._supersede_and_set_active(event)
+                await self._fire_callback(event)
+                return
+            
+            # opModEnergize=true: reset EmergencyStop (no PCS mode change)
+            if base.opModEnergize is True:
+                reset_source = f"{source}:opModEnergize=true:{event.event_id}"
+                was_stopped = EmergencyStop.is_stopped()
+                if was_stopped:
+                    EmergencyStop.reset_by_server(reset_source)
+                logger.info(
+                    f"DERControl {event.event_id}: opModEnergize=true, "
+                    f"re-energize acknowledged"
+                    f"{' [EmergencyStop cleared]' if was_stopped else ''}"
+                )
+                event.status = DERControlEventStatus.COMPLETED
+                self._supersede_and_set_active(event)
+                await self._fire_callback(event)
+                return
+        
+        # --- EmergencyStop gate (blocks non-recovery commands) ---
         if EmergencyStop.is_stopped():
             event.status = DERControlEventStatus.FAILED
             event.error_message = "Emergency stop is active"
             logger.warning(f"DERControl blocked by emergency stop: {event.event_id}")
             return
         
-        # 檢查連接/去能控制
-        control = event.control
+        # --- Disconnect / de-energize commands ---
         if control.DERControlBase:
             base = control.DERControlBase
             
@@ -303,18 +432,8 @@ class DERControlHandler:
                     event.error_message = str(e)
                     logger.exception(f"DERControl disconnect error: {event.event_id}")
                 
-                # 取代當前活動控制
-                if self._active_event and self._active_event.event_id != event.event_id:
-                    if self._active_event.status in (DERControlEventStatus.ACTIVE, DERControlEventStatus.COMPLETED):
-                        self._active_event.status = DERControlEventStatus.SUPERSEDED
-                self._active_event = event
-                
-                # 執行回調
-                if self._on_control_executed:
-                    try:
-                        await self._on_control_executed(event)
-                    except Exception as e:
-                        logger.exception(f"Control executed callback error: {e}")
+                self._supersede_and_set_active(event)
+                await self._fire_callback(event)
                 return
             
             # opModEnergize=false: 僅功率歸零（不切換 PCS 模式）
@@ -348,18 +467,8 @@ class DERControlHandler:
                     event.error_message = str(e)
                     logger.exception(f"DERControl de-energize error: {event.event_id}")
                 
-                # 取代當前活動控制
-                if self._active_event and self._active_event.event_id != event.event_id:
-                    if self._active_event.status in (DERControlEventStatus.ACTIVE, DERControlEventStatus.COMPLETED):
-                        self._active_event.status = DERControlEventStatus.SUPERSEDED
-                self._active_event = event
-                
-                # 執行回調
-                if self._on_control_executed:
-                    try:
-                        await self._on_control_executed(event)
-                    except Exception as e:
-                        logger.exception(f"Control executed callback error: {e}")
+                self._supersede_and_set_active(event)
+                await self._fire_callback(event)
                 return
         
         # 取得功率設定點
@@ -373,14 +482,7 @@ class DERControlHandler:
             return
         
         # 取代當前活動控制（檢查 ACTIVE 或 COMPLETED 狀態）
-        if self._active_event and self._active_event.event_id != event.event_id:
-            if self._active_event.status in (DERControlEventStatus.ACTIVE, DERControlEventStatus.COMPLETED):
-                self._active_event.status = DERControlEventStatus.SUPERSEDED
-                logger.info(
-                    f"DERControl superseded: {self._active_event.event_id} -> {event.event_id}"
-                )
-        
-        self._active_event = event
+        self._supersede_and_set_active(event)
         
         # 透過安全控制器設定功率
         try:
@@ -417,11 +519,7 @@ class DERControlHandler:
             logger.exception(f"DERControl execution error: {event.event_id}")
         
         # 執行回調
-        if self._on_control_executed:
-            try:
-                await self._on_control_executed(event)
-            except Exception as e:
-                logger.exception(f"Control executed callback error: {e}")
+        await self._fire_callback(event)
     
     async def cancel_control(self, event_id: str) -> bool:
         """
@@ -441,17 +539,40 @@ class DERControlHandler:
             if event.status in (
                 DERControlEventStatus.PENDING,
                 DERControlEventStatus.SCHEDULED,
-                DERControlEventStatus.ACTIVE
+                DERControlEventStatus.ACTIVE,
+                DERControlEventStatus.COMPLETED,
             ):
                 event.status = DERControlEventStatus.CANCELLED
                 
-                # 如果是當前活動控制，設定功率為 0
+                # If the cancelled event is the active one, recover
                 if event == self._active_event:
-                    await self.power_controller.set_power_setpoint(
-                        power_w=0,
-                        source="cancel"
-                    )
+                    was_disconnect = self._event_is_disconnect_or_deenergize(event)
+                    
+                    if was_disconnect:
+                        # The cancelled event was a disconnect/de-energize:
+                        # reset EmergencyStop and reconnect PCS
+                        cancel_src = f"cancel:{event_id}"
+                        EmergencyStop.reset_by_server(cancel_src)
+                        await self.power_controller.reconnect_pcs(
+                            source=cancel_src
+                        )
+                        logger.info(
+                            f"DERControl cancel: reconnect PCS "
+                            f"(cancelled disconnect/de-energize {event_id})"
+                        )
+                    else:
+                        await self.power_controller.set_power_setpoint(
+                            power_w=0,
+                            source="cancel"
+                        )
+                    
                     self._active_event = None
+                    
+                    # DefaultDERControl fallback
+                    if self._default_der_control is not None:
+                        await self._apply_default_control(
+                            source=f"default_fallback:cancel:{event_id}"
+                        )
                 
                 logger.info(f"DERControl cancelled: {event_id}")
                 return True

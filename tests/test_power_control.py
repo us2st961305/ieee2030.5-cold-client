@@ -287,21 +287,17 @@ class TestEmergencyStop:
         assert status["stopped"] is True
         assert status["reason"] == "test reason"
     
-    def test_reset_without_token_fails(self):
-        """測試無 token 重置失敗"""
-        EmergencyStop.trigger("test")
-        
-        result = EmergencyStop.reset("invalid_token")
+    def test_reset_without_stopped_state_returns_false(self):
+        """Test reset when not in stopped state returns False"""
+        result = EmergencyStop.reset_by_server("server-cmd")
         
         assert result is False
-        assert EmergencyStop.is_stopped() is True
     
-    def test_reset_with_valid_token(self, monkeypatch):
-        """測試有效 token 重置成功"""
-        monkeypatch.setenv("POWER_CONTROL_SAFETY_TOKEN", "valid_token")
+    def test_reset_by_server_succeeds(self):
+        """Test server-initiated reset succeeds when stopped"""
         EmergencyStop.trigger("test")
         
-        result = EmergencyStop.reset("valid_token")
+        result = EmergencyStop.reset_by_server("opModConnect=true:evt-1")
         
         assert result is True
         assert EmergencyStop.is_stopped() is False
@@ -333,11 +329,10 @@ class TestEmergencyStop:
 
         assert errors == [], f"Race condition detected: {errors[:5]}"
 
-    def test_concurrent_trigger_and_reset(self, monkeypatch):
-        """測試並發 trigger + reset 不會丟失觸發原因"""
+    def test_concurrent_trigger_and_reset(self):
+        """測試並發 trigger + reset_by_server 不會丟失觸發原因"""
         import threading
 
-        monkeypatch.setenv("POWER_CONTROL_SAFETY_TOKEN", "tok")
         errors: list[str] = []
 
         def trigger_and_check():
@@ -349,7 +344,7 @@ class TestEmergencyStop:
 
         def reset_loop():
             for _ in range(200):
-                EmergencyStop.reset("tok")
+                EmergencyStop.reset_by_server("server-recovery")
 
         t1 = threading.Thread(target=trigger_and_check)
         t2 = threading.Thread(target=reset_loop)
