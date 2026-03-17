@@ -741,8 +741,8 @@ class BMSClient:
             rt_pc = runtime_config.power_control
             controller = create_power_controller_from_runtime(rt_pc)
             
-            # For non-simulation modes, create and wire PCS Modbus writer
-            if not rt_pc.is_simulation:
+            # For non-dry_run modes, create and wire PCS Modbus writer
+            if not rt_pc.is_dry_run:
                 try:
                     from pymodbus.client import AsyncModbusTcpClient
                     

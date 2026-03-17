@@ -186,7 +186,7 @@ class TestSafePowerController:
     def controller(self):
         return SafePowerController(PowerControlConfig(mode="dry_run"))
     
-    def test_default_is_simulation_mode(self, controller):
+    def test_default_is_dry_run_mode(self, controller):
         """測試預設為 dry_run 模式"""
         assert controller.simulation_mode is True
         assert controller.control_mode == ControlMode.DRY_RUN
