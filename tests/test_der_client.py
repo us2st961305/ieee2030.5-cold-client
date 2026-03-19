@@ -23,7 +23,7 @@ from bms_2030_5_client.models import (
     DefaultDERControl,
     FunctionSetAssignments,
     FunctionSetAssignmentsList,
-    DERControlResponse,
+    DERControlResponseFull,
     ResponseStatusType,
     DateTimeInterval,
     SignedPerCent,
@@ -743,7 +743,7 @@ class TestSendResponse:
     async def test_send_response_retries_on_failure(self, der_client, mock_http_client):
         """HTTP POST 失敗時應重試 response_max_retries 次後回傳 False"""
         mock_http_client._post = AsyncMock(side_effect=Exception("network error"))
-        der_client.config.response_max_retries = 2
+        der_client.config.response_max_retries = 3
 
         program = DERProgram(mRID="prog001", primacy=1)
         control = DERControl(

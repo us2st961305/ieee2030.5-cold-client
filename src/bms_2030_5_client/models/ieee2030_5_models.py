@@ -1167,21 +1167,23 @@ class ResponseStatusType(IntEnum):
     Response status codes for DER control events.
     
     Reference: IEEE Std 2030.5-2023 Table 27
+    
+    NOTE: Values are 1-based per spec. 0 is reserved.
     """
-    EVENT_RECEIVED = 0               # Event received
-    EVENT_STARTED = 1                # Event started (executed)
-    EVENT_COMPLETED = 2              # Event completed normally
-    EVENT_SUPERSEDED = 3             # Event superseded by higher priority
-    EVENT_CANCELLED_WITH_RANDOM = 4  # Event cancelled with randomization
-    EVENT_CANCELLED = 5              # Event cancelled
-    EVENT_EXPIRED = 6                # Event expired (not executed)
-    NO_USER_OPT_IN = 7               # User did not opt-in
-    NO_USER_OPT_OUT = 8              # User opted out
-    PARTIAL_OPT_OUT = 9              # Partial opt-out
-    EVENT_ABORTED_SERVER = 10        # Server aborted
-    EVENT_ABORTED_OVERSUB = 11       # Oversubscription
-    RESERVED = 12                    # Reserved for future use
-    EVENT_NOT_APPLICABLE = 255       # Event not applicable
+    RESERVED = 0                     # Reserved (do not use)
+    EVENT_RECEIVED = 1               # Event received
+    EVENT_STARTED = 2                # Event started (executed)
+    EVENT_COMPLETED = 3              # Event completed normally
+    EVENT_SUPERSEDED = 4             # Event superseded by higher priority
+    EVENT_CANCELLED_WITH_RANDOM = 5  # Event cancelled with randomization
+    EVENT_CANCELLED = 6              # Event cancelled
+    EVENT_EXPIRED = 7                # Event expired (not executed)
+    NO_USER_OPT_IN = 8              # User did not opt-in
+    NO_USER_OPT_OUT = 9             # User opted out
+    PARTIAL_OPT_OUT = 10             # Partial opt-out
+    EVENT_ABORTED_SERVER = 11        # Server aborted
+    EVENT_ABORTED_OVERSUB = 12       # Oversubscription
+    EVENT_NOT_APPLICABLE = 253       # Event not applicable
 
 
 @dataclass_json

@@ -34,7 +34,8 @@ from bms_2030_5_client.models import (
     DefaultDERControl,
     FunctionSetAssignments,
     FunctionSetAssignmentsList,
-    DERControlResponse,
+    DERControlResponseFull,
+    DERControlModesType,
     ResponseStatusType,
     DateTimeInterval,
     SignedPerCent,
@@ -672,12 +673,6 @@ class DERClient:
         
         self._tracked_controls[ctrl_id] = tracked_ctrl
         
-        # 發送 EVENT_RECEIVED 回應 (IEEE 2030.5-2023: 收到控制時回報)
-        await self._send_response(
-            tracked_ctrl,
-            ResponseStatusType.EVENT_RECEIVED
-        )
-        
         # 檢查是否應立即執行
         now = int(time.time())
         
@@ -694,10 +689,15 @@ class DERClient:
             
             if now >= effective_start and now < effective_end:
                 # 已過開始時間但未過結束時間，立即執行
+                # EVENT_RECEIVED 在 _execute_control 內發送（衝突檢查後）
                 logger.info(f"Control {ctrl_id} is in active period, executing now")
                 await self._execute_control(tracked_ctrl)
             elif now < effective_start:
-                # 未到開始時間，排程
+                # 未到開始時間，排程 — 先發 EVENT_RECEIVED
+                await self._send_response(
+                    tracked_ctrl,
+                    ResponseStatusType.EVENT_RECEIVED
+                )
                 tracked_ctrl.status = DERControlEventStatus.SCHEDULED
                 logger.info(
                     f"Control {ctrl_id} scheduled, "
@@ -713,6 +713,7 @@ class DERClient:
                 )
         else:
             # 無 interval，立即執行
+            # EVENT_RECEIVED 在 _execute_control 內發送（衝突檢查後）
             await self._execute_control(tracked_ctrl)
         
         # 標記已處理
@@ -771,7 +772,7 @@ class DERClient:
         superseded = await self._resolve_conflict(tracked)
         
         if superseded:
-            # 被更高優先級控制取代
+            # 被更高優先級控制取代 — 直接發 SUPERSEDED，不發 RECEIVED
             tracked.status = DERControlEventStatus.SUPERSEDED
             logger.info(f"Control {ctrl_id} superseded")
             await self._send_response(
@@ -779,6 +780,12 @@ class DERClient:
                 ResponseStatusType.EVENT_SUPERSEDED
             )
             return
+        
+        # 衝突檢查通過，發送 EVENT_RECEIVED (IEEE 2030.5-2023)
+        await self._send_response(
+            tracked,
+            ResponseStatusType.EVENT_RECEIVED
+        )
         
         # 取消活動的 DefaultDERControl
         self._active_default = None
@@ -1097,6 +1104,33 @@ class DERClient:
     # 5. Response Reporting
     # =========================================================================
     
+    @staticmethod
+    def _calculate_modes_responded(control: DERControl) -> int:
+        """
+        Calculate modesResponded bitmap from DERControlBase.
+
+        Reference: IEEE Std 2030.5-2023, DERControlType bitmap
+        """
+        if not control.DERControlBase:
+            return 0
+        base = control.DERControlBase
+        bitmap = 0
+        if base.opModConnect is not None:
+            bitmap |= DERControlModesType.OP_MOD_CONNECT
+        if base.opModEnergize is not None:
+            bitmap |= DERControlModesType.OP_MOD_ENERGIZE
+        if getattr(base, 'opModFixedPFAbsorbW', None) is not None:
+            bitmap |= DERControlModesType.OP_MOD_FIXED_PF_ABSORB_W
+        if getattr(base, 'opModFixedPFInjectW', None) is not None:
+            bitmap |= DERControlModesType.OP_MOD_FIXED_PF_INJECT_W
+        if getattr(base, 'opModFixedVar', None) is not None:
+            bitmap |= DERControlModesType.OP_MOD_FIXED_VAR
+        if base.opModFixedW is not None:
+            bitmap |= DERControlModesType.OP_MOD_FIXED_W
+        if getattr(base, 'opModMaxLimW', None) is not None:
+            bitmap |= DERControlModesType.OP_MOD_MAX_LIM_W
+        return bitmap
+
     async def _send_response(
         self,
         tracked: TrackedControl,
@@ -1157,12 +1191,16 @@ class DERClient:
         # 取得 LFDI
         lfdi = self.http_client.lfdi or ""
 
-        # 建立回報
-        response = DERControlResponse(
+        # 計算 modesResponded bitmap
+        modes_bitmap = self._calculate_modes_responded(control)
+
+        # 建立回報 (IEEE Std 2030.5-2023: modesResponded SHALL be present)
+        response = DERControlResponseFull(
+            createdDateTime=int(time.time()),
             endDeviceLFDI=lfdi,
             status=status,
             subject=control.mRID or "",
-            createdDateTime=int(time.time()),
+            modesResponded=DERControlResponseFull.modes_to_hex(modes_bitmap),
         )
         
         # 實際發送 HTTP POST（含重試機制）
