@@ -5,6 +5,7 @@ certs/
 .coverage
 config/config.yaml
 config/runtime.yaml
+config/*.test.yaml
 data/
 
 # Ignore binary garbage files (in case of corrupted output)
