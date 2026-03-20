@@ -620,6 +620,17 @@ class DERClient:
         
         # 檢查是否已處理
         if ctrl_id in self._processed_mRIDs:
+            # Check if server cancelled this control (currentStatus=2)
+            if (
+                control.EventStatus
+                and control.EventStatus.currentStatus == 2
+            ):
+                logger.info(
+                    f"Server cancelled detected for {ctrl_id}, "
+                    f"processing cancel"
+                )
+                self._processed_mRIDs.remove(ctrl_id)
+                await self._handle_server_cancel(ctrl_id)
             return
         
         logger.info(
@@ -1035,6 +1046,21 @@ class DERClient:
             tracked,
             ResponseStatusType.EVENT_CANCELLED
         )
+    
+    async def _handle_server_cancel(self, ctrl_id: str) -> None:
+        """
+        Handle server-side cancel (EventStatus.currentStatus == 2).
+        
+        Delegates to handler.cancel_control() which handles reconnect_pcs()
+        for disconnect/de-energize events, then sends EVENT_CANCELLED response.
+        """
+        # Cancel via handler (triggers reconnect if was disconnect)
+        cancelled = await self.handler.cancel_control(ctrl_id)
+        if cancelled:
+            logger.info(f"Server cancel handled via handler for {ctrl_id}")
+        
+        # Also cancel in tracked controls and send response
+        await self._cancel_control(ctrl_id, "server_cancel (currentStatus=2)")
     
     # =========================================================================
     # 4. Conflict Resolution

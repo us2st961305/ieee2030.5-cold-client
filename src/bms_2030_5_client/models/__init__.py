@@ -286,6 +286,7 @@ from bms_2030_5_client.models.ieee2030_5_models import (
     # DER Control models
     SignedPerCent,
     PerCent,
+    EventStatus,
     DERControlBase,
     DERControl,
     DERControlList,
@@ -518,6 +519,7 @@ __all__ = [
     # DER Control models
     "SignedPerCent",
     "PerCent",
+    "EventStatus",
     "DERControlBase",
     "DERControl",
     "DERControlList",

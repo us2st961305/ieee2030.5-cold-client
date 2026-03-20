@@ -966,6 +966,24 @@ class DERControlBase:
 
 @dataclass_json
 @dataclass
+class EventStatus:
+    """
+    Current status of an event (IEEE Std 2030.5-2023, Section 12.16).
+    
+    currentStatus values:
+        0 = Scheduled
+        1 = Active
+        2 = Cancelled
+        3 = CancelledRandom
+        4 = Superseded
+    """
+    currentStatus: int = 0
+    dateTime: int = 0                                 # Unix timestamp of status change
+    potentiallySuperseded: bool = False
+
+
+@dataclass_json
+@dataclass
 class DERControl:
     """
     DER Control event from IEEE 2030.5 Server.
@@ -985,7 +1003,8 @@ class DERControl:
     # Scheduling
     interval: Optional[DateTimeInterval] = None       # When this control is active
     
-    # Event status
+    # Event status (from server, Section 12.16)
+    EventStatus: Optional[EventStatus] = None
     randomizeStart: Optional[int] = None              # Random delay before start (seconds)
     randomizeDuration: Optional[int] = None           # Random adjustment to duration
     

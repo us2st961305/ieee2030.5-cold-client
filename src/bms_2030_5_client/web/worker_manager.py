@@ -230,6 +230,14 @@ class WorkerManager:
                 enable_der_control=True,
             )
             
+            # Inject runtime config for power control support
+            if runtime_config:
+                self._client._runtime_config = runtime_config
+                logger.info(
+                    f"Injected runtime config (power_control.mode="
+                    f"{runtime_config.power_control.mode})"
+                )
+            
             # Update status
             self._set_state(WorkerState.RUNNING)
             with self._lock:
