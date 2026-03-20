@@ -36,31 +36,50 @@ power_audit_logger = logging.getLogger("power_control.audit")
 
 class PCSRegisterAddress:
     """
-    PCS Modbus 暫存器位址定義
-    
-    ⚠️ 注意：這些位址需要根據實際 PCS 設備進行調整
+    PCS Modbus 暫存器位址定義 — CUBE 電池組暫存器通訊表 V1.0.3
+
+    Reference: CUBE V1.0.3 §7848–7865 (Sys Power LW)
+    Addresses are actual Modbus addresses (document addresses, already offset).
     """
-    # 功率控制暫存器（示例位址，需根據實際 PCS 調整）
-    POWER_SETPOINT = 40001          # 功率設定點 (W or 0.1kW)
-    POWER_SETPOINT_HIGH = 40002     # 功率設定點高位元（32-bit）
-    
-    # 模式控制
-    OPERATION_MODE = 40010          # 運行模式
-    ENABLE_CONTROL = 40011          # 啟用控制
-    
-    # 狀態暫存器
-    ACTUAL_POWER = 40100            # 實際功率
-    OPERATION_STATUS = 40101        # 運行狀態
-    ERROR_CODE = 40102              # 錯誤碼
+    # --- PCS 控制暫存器 (R/W) ---
+    PCS_ON = 7850                   # Pulse write 1 = 開機
+    PCS_OFF = 7851                  # Pulse write 1 = 關機
+    POWER_SETPOINT = 7852           # P_SET, S16, 0.1 kW
+    Q_SETPOINT = 7853               # Q_SET, S16, 0.1 kVAR
+
+    # --- PCS 狀態暫存器 (RO) ---
+    PCS_STATE = 7848                # PCS_state, U16 (see PCSState enum)
+    PCS_ALARM = 7854                # PCS_alarm, U16, bitfield
+    ACTUAL_POWER = 7855             # PCS_P_read, S16, 0.1 kW
+    ACTUAL_Q = 7856                 # PCS_Q_read, S16, 0.1 kVAR
+    FREQ = 7857                     # FREQ, U16, 0.1 Hz
+
+    # Legacy aliases (kept for backward compatibility with audit logs)
+    OPERATION_STATUS = PCS_STATE
+    ERROR_CODE = PCS_ALARM
 
 
-class PCSOperationMode(Enum):
-    """PCS 運行模式"""
-    STANDBY = 0         # 待機
-    CHARGING = 1        # 充電
-    DISCHARGING = 2     # 放電
-    AUTO = 3            # 自動
-    REMOTE = 4          # 遠程控制
+class PCSState(Enum):
+    """PCS 狀態 (register 7848, read-only). Ref: CUBE V1.0.3"""
+    INITIALIZE = 0
+    FAULT = 1
+    CALIBRATE = 2
+    DISABLED = 3
+    CHARGE_WAIT = 4
+    CHARGING = 5
+    STANDBY = 6
+    TURN_ON_DELAY = 7
+    ONLINE_GRID_TIE = 8
+    OFFLINE = 9
+    ACTIVE_RIDE_THRU = 10
+    PASSIVE_RIDE_THRU = 11
+    ONLINE_GRID_FORM = 12
+    POWER_DOWN = 13
+    TURN_OFF = 16
+
+
+# Backward-compatible alias
+PCSOperationMode = PCSState
 
 
 @dataclass
@@ -81,10 +100,10 @@ class ModbusPowerWriterConfig:
     """Modbus 功率寫入器配置"""
     # PCS 暫存器位址配置
     power_setpoint_address: int = PCSRegisterAddress.POWER_SETPOINT
-    use_32bit_power: bool = False   # 是否使用 32-bit 功率值
     
-    # 功率縮放
-    power_scale_factor: float = 1.0  # 1.0 = W, 0.1 = 0.1kW, 0.001 = kW
+    # Power scale: W (input) → 0.1 kW (register)
+    # 50000 W × 0.01 = 500 → register value 500 = 50.0 kW
+    power_scale_factor: float = 0.01
     
     # 寫入確認
     verify_after_write: bool = True  # 寫入後讀回確認
@@ -190,28 +209,14 @@ class ModbusPowerWriter:
                     error_message="Aborted: emergency stop active",
                 )
             try:
-                if self.config.use_32bit_power:
-                    # 32-bit 寫入（高位元 + 低位元）
-                    high_word = (register_value >> 16) & 0xFFFF
-                    low_word = register_value & 0xFFFF
-                    
-                    await self.modbus_client.write_register(
-                        self.config.power_setpoint_address,
-                        low_word
-                    )
-                    await self.modbus_client.write_register(
-                        self.config.power_setpoint_address + 1,
-                        high_word
-                    )
-                else:
-                    # 16-bit 寫入
-                    success = await self.modbus_client.write_register(
-                        self.config.power_setpoint_address,
-                        register_value & 0xFFFF
-                    )
-                    
-                    if not success:
-                        raise Exception("Modbus write failed")
+                # P_SET is S16 (0.1 kW) — 16-bit signed write
+                success = await self.modbus_client.write_register(
+                    self.config.power_setpoint_address,
+                    register_value & 0xFFFF
+                )
+                
+                if not success:
+                    raise Exception("Modbus write failed")
                 
                 # 寫入後驗證
                 if self.config.verify_after_write:
@@ -330,18 +335,17 @@ class ModbusPowerWriter:
     
     async def disconnect(self, reason: str = "opModConnect=false") -> PowerWriteResult:
         """
-        斷開控制：將 PCS 功率歸零並切換至待機模式
-        
-        對應 IEEE 2030.5 DERControlBase.opModConnect=false
-        
-        執行動作：
-        1. 功率設定點歸零 (POWER_SETPOINT → 0)
-        2. PCS 運行模式切至待機 (OPERATION_MODE → STANDBY(0))
-        3. 記錄斷開事件到審計日誌
-        
+        Disconnect PCS: zero power then pulse PCS_OFF.
+
+        Corresponds to IEEE 2030.5 DERControlBase.opModConnect=false.
+
+        Steps:
+        1. P_SET (7852) = 0  — zero power setpoint
+        2. PCS_OFF (7851) = 1  — pulse to shut down PCS
+
         Args:
-            reason: 斷開原因描述
-        
+            reason: Disconnect reason description.
+
         Returns:
             PowerWriteResult
         """
@@ -349,61 +353,59 @@ class ModbusPowerWriter:
             f"DISCONNECT | reason={reason} | "
             f"timestamp={datetime.now(timezone.utc).isoformat()}"
         )
-        
+
         # Step 1: 功率歸零
         power_result = await self.set_power(0, source=f"disconnect:{reason}")
         if not power_result.success:
             return power_result
-        
-        # Step 2: 切換 PCS 運行模式至 STANDBY
+
+        # Step 2: Pulse PCS_OFF to shut down
         try:
-            mode_success = await self.modbus_client.write_register(
-                PCSRegisterAddress.OPERATION_MODE,
-                PCSOperationMode.STANDBY.value,
+            off_success = await self.modbus_client.write_register(
+                PCSRegisterAddress.PCS_OFF,
+                1,  # pulse
             )
-            if mode_success:
+            if off_success:
                 power_audit_logger.info(
-                    f"DISCONNECT_MODE_SET | "
-                    f"register={PCSRegisterAddress.OPERATION_MODE} | "
-                    f"value={PCSOperationMode.STANDBY.value} (STANDBY)"
+                    f"DISCONNECT_PCS_OFF | "
+                    f"register={PCSRegisterAddress.PCS_OFF} | value=1 (pulse)"
                 )
             else:
                 power_audit_logger.error(
-                    f"DISCONNECT_MODE_FAILED | "
-                    f"register={PCSRegisterAddress.OPERATION_MODE}"
+                    f"DISCONNECT_PCS_OFF_FAILED | "
+                    f"register={PCSRegisterAddress.PCS_OFF}"
                 )
                 return PowerWriteResult(
                     success=False,
                     simulated=False,
                     requested_power_w=0,
                     timestamp=datetime.now(timezone.utc),
-                    error_message="Failed to set OPERATION_MODE to STANDBY",
+                    error_message="Failed to pulse PCS_OFF",
                 )
         except Exception as e:
             power_audit_logger.error(
-                f"DISCONNECT_MODE_ERROR | error={e}"
+                f"DISCONNECT_PCS_OFF_ERROR | error={e}"
             )
             return PowerWriteResult(
                 success=False,
                 simulated=False,
                 requested_power_w=0,
                 timestamp=datetime.now(timezone.utc),
-                error_message=f"OPERATION_MODE write error: {e}",
+                error_message=f"PCS_OFF write error: {e}",
             )
-        
+
         return power_result
     
     async def reconnect(self, reason: str = "opModConnect=true") -> PowerWriteResult:
         """
-        Reconnect PCS: restore OPERATION_MODE to REMOTE.
+        Reconnect PCS: pulse PCS_ON to start up.
 
         Inverse of disconnect(). Does NOT write a power setpoint — only
-        switches the PCS mode back to REMOTE so subsequent power commands are
-        accepted.  Corresponds to IEEE 2030.5 DERControlBase.opModConnect=true.
+        pulses PCS_ON so subsequent power commands can be accepted.
+        Corresponds to IEEE 2030.5 DERControlBase.opModConnect=true.
 
         Steps:
-        1. OPERATION_MODE → REMOTE(4)
-        2. Audit log entry
+        1. PCS_ON (7850) = 1  — pulse to start PCS
 
         Args:
             reason: Reconnect reason description.
@@ -417,15 +419,14 @@ class ModbusPowerWriter:
         )
 
         try:
-            mode_success = await self.modbus_client.write_register(
-                PCSRegisterAddress.OPERATION_MODE,
-                PCSOperationMode.REMOTE.value,
+            on_success = await self.modbus_client.write_register(
+                PCSRegisterAddress.PCS_ON,
+                1,  # pulse
             )
-            if mode_success:
+            if on_success:
                 power_audit_logger.info(
-                    f"RECONNECT_MODE_SET | "
-                    f"register={PCSRegisterAddress.OPERATION_MODE} | "
-                    f"value={PCSOperationMode.REMOTE.value} (REMOTE)"
+                    f"RECONNECT_PCS_ON | "
+                    f"register={PCSRegisterAddress.PCS_ON} | value=1 (pulse)"
                 )
                 return PowerWriteResult(
                     success=True,
@@ -435,24 +436,24 @@ class ModbusPowerWriter:
                 )
             else:
                 power_audit_logger.error(
-                    f"RECONNECT_MODE_FAILED | "
-                    f"register={PCSRegisterAddress.OPERATION_MODE}"
+                    f"RECONNECT_PCS_ON_FAILED | "
+                    f"register={PCSRegisterAddress.PCS_ON}"
                 )
                 return PowerWriteResult(
                     success=False,
                     simulated=False,
                     requested_power_w=0,
                     timestamp=datetime.now(timezone.utc),
-                    error_message="Failed to set OPERATION_MODE to REMOTE",
+                    error_message="Failed to pulse PCS_ON",
                 )
         except Exception as e:
-            power_audit_logger.error(f"RECONNECT_MODE_ERROR | error={e}")
+            power_audit_logger.error(f"RECONNECT_PCS_ON_ERROR | error={e}")
             return PowerWriteResult(
                 success=False,
                 simulated=False,
                 requested_power_w=0,
                 timestamp=datetime.now(timezone.utc),
-                error_message=f"OPERATION_MODE write error: {e}",
+                error_message=f"PCS_ON write error: {e}",
             )
     
     async def emergency_stop(self, reason: str) -> PowerWriteResult:

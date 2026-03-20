@@ -371,7 +371,7 @@ class SafePowerController:
         # DRY_RUN 模式
         if self._control_mode == ControlMode.DRY_RUN:
             self._log_request(request_id, 0, source, "dry_run", [])
-            msg = "[DRY_RUN] Would disconnect PCS: power=0W + OPERATION_MODE=STANDBY"
+            msg = "[DRY_RUN] Would disconnect PCS: P_SET=0 + PCS_OFF pulse"
             logger.info(msg)
             return PowerControlResult(
                 request_id=request_id,
@@ -453,11 +453,11 @@ class SafePowerController:
     
     async def reconnect_pcs(self, source: str = "opModConnect=true") -> PowerControlResult:
         """
-        Reconnect PCS: restore OPERATION_MODE to REMOTE.
+        Reconnect PCS: pulse PCS_ON to start up.
 
         Inverse of disconnect_pcs(). Does NOT set a power setpoint — only
-        restores the PCS operation mode so subsequent power commands can be
-        accepted.  Corresponds to IEEE 2030.5 DERControlBase.opModConnect=true.
+        pulses PCS_ON so subsequent power commands can be accepted.
+        Corresponds to IEEE 2030.5 DERControlBase.opModConnect=true.
 
         Args:
             source: Request origin identifier.
@@ -471,7 +471,7 @@ class SafePowerController:
         # DRY_RUN mode
         if self._control_mode == ControlMode.DRY_RUN:
             self._log_request(request_id, 0, source, "dry_run", [])
-            msg = "[DRY_RUN] Would reconnect PCS: OPERATION_MODE=REMOTE"
+            msg = "[DRY_RUN] Would reconnect PCS: PCS_ON pulse"
             logger.info(msg)
             return PowerControlResult(
                 request_id=request_id,

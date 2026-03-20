@@ -15,7 +15,8 @@ from bms_2030_5_client.modbus.power_writer import (
     PowerWriteResult,
     PCSPowerAdapter,
     PCSRegisterAddress,
-    PCSOperationMode,
+    PCSState,
+    PCSOperationMode,  # backward-compatible alias for PCSState
 )
 from bms_2030_5_client.modbus.register_writer import (
     ModbusRegisterWriter,
@@ -41,6 +42,7 @@ __all__ = [
     "PowerWriteResult",
     "PCSPowerAdapter",
     "PCSRegisterAddress",
+    "PCSState",
     "PCSOperationMode",
     # Register writing (async)
     "ModbusRegisterWriter",
