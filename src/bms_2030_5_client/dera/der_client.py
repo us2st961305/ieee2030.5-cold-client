@@ -575,12 +575,8 @@ class DERClient:
         """輪詢單個計畫的控制"""
         program = tracked.program
         
-        # IEEE 2030.5-2023: ActiveDERControlListLink 已棄用 (DEPRECATED)
-        # 優先使用 DERControlListLink (/derp/{id}/derc)
-        control_list_href = (
-            program.get_der_control_list_href() or
-            program.get_active_der_control_list_href()  # Fallback for legacy servers
-        )
+        # IEEE 2030.5-2023: 使用 DERControlListLink (/derp/{id}/derc)
+        control_list_href = program.get_der_control_list_href()
         
         if not control_list_href:
             return

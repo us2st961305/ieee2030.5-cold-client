@@ -252,11 +252,10 @@ class DERControlPoller:
         controls = []
         
         try:
-            # 嘗試取得 Active DER Control List
-            # 路徑通常是: /edev/{id}/derp/0/actderc
-            # 或從 DERProgram 取得 ActiveDERControlListLink
+            # 取得 DER Control List
+            # 路徑: /edev/{id}/derp/{id}/derc
             
-            # 方法 1: 直接取得 Active Control
+            # 方法 1: 直接取得 DER Controls
             active_controls = await self._get_active_der_controls()
             if active_controls:
                 controls.extend(active_controls)
@@ -272,7 +271,7 @@ class DERControlPoller:
         return controls
     
     async def _get_active_der_controls(self) -> list[DERControl]:
-        """直接取得 Active DER Controls"""
+        """直接取得 DER Controls (via /derc endpoint)"""
         controls = []
         
         try:
@@ -281,15 +280,15 @@ class DERControlPoller:
             if not end_device:
                 return controls
             
-            # 構建 Active Control URI
-            # 典型路徑: /edev/{id}/derp/actderc
+            # 構建 DER Control URI
+            # 路徑: /edev/{id}/derp/{id}/derc
             edev_href = end_device.href or ""
             
             # 嘗試幾個常見的路徑模式
             possible_paths = [
-                f"{edev_href}/derp/actderc",
-                f"{edev_href}/der/actderc",
-                f"/derp/actderc",
+                f"{edev_href}/derp/0/derc",
+                f"{edev_href}/der/1/derc",
+                f"/derp/0/derc",
             ]
             
             for path in possible_paths:
@@ -317,12 +316,8 @@ class DERControlPoller:
             return controls
         
         try:
-            # IEEE 2030.5-2023: ActiveDERControlListLink 已棄用 (DEPRECATED)
-            # 優先使用 DERControlListLink (/derp/{id}/derc)
-            link_href = (
-                self._current_program.get_der_control_list_href() or
-                self._current_program.get_active_der_control_list_href()  # Fallback
-            )
+            # IEEE 2030.5-2023: 使用 DERControlListLink (/derp/{id}/derc)
+            link_href = self._current_program.get_der_control_list_href()
             if not link_href:
                 return controls
             

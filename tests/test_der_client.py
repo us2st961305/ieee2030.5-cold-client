@@ -123,7 +123,7 @@ class TestFSADiscovery:
         program = DERProgram(
             mRID="prog001",
             primacy=1,
-            ActiveDERControlListLink="/derp/1/derca",
+            DERControlListLink="/derp/1/derc",
         )
         program_list = DERProgramList(
             DERProgram=[program],
