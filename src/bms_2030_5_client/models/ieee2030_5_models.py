@@ -1454,6 +1454,9 @@ class DERControlResponseFull:
             <modesResponded>0001</modesResponded>
         </DERControlResponse>
     """
+    # IEEE 2030.5 XSD canonical element name (class name differs for clarity)
+    XML_TAG: str = field(default="DERControlResponse", init=False, repr=False)
+
     # Required: Response creation timestamp (Unix time)
     createdDateTime: int = 0
     

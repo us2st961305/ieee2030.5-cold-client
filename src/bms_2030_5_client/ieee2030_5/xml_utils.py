@@ -206,7 +206,7 @@ def dataclass_to_xml(obj: Any, root_tag: str = None) -> str:
     if not is_dataclass(obj):
         raise ValueError(f"Expected dataclass, got {type(obj)}")
     
-    tag = root_tag or obj.__class__.__name__
+    tag = root_tag or getattr(obj, 'XML_TAG', None) or obj.__class__.__name__
     root = ET.Element(tag, xmlns=IEEE2030_5_NS)
     
     _dataclass_to_element(obj, root)
@@ -223,6 +223,10 @@ def _dataclass_to_element(obj: Any, element: ET.Element) -> None:
     for f in fields(obj):
         value = getattr(obj, f.name)
         if value is None:
+            continue
+        
+        # Skip metadata fields (not part of XML schema)
+        if f.name == 'XML_TAG':
             continue
         
         # Handle special field names
