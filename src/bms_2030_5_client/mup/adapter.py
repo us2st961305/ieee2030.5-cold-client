@@ -345,6 +345,7 @@ class MirrorUsagePointAdapter:
         soh: Optional[float] = None,
         cycle_count: Optional[int] = None,
         include_reading_type: bool = False,
+        skip_missing_mrids: bool = False,
     ) -> List[MirrorMeterReading]:
         """
         Convert BMS snapshot to meter readings for upload.
@@ -371,6 +372,9 @@ class MirrorUsagePointAdapter:
             include_reading_type: Whether to include ReadingType in readings.
                                   Should be False for periodic updates (default),
                                   True only for initial registration of new mRIDs.
+            skip_missing_mrids: When True, skip readings that have no mRID in
+                                reading_mrids instead of generating new random mRIDs.
+                                Enables partial upload (Layer 3 of mRID recovery).
             
         Returns:
             List of MirrorMeterReading objects ready for upload
@@ -381,92 +385,113 @@ class MirrorUsagePointAdapter:
         # Current Reading (0.1A units from CUBE)
         # Register 4001: total_curr (0.1A) - signed, positive=charge
         current_value = int(snapshot.system.total_current * 10)  # Convert A to 0.1A
-        readings.append(self._create_meter_reading(
+        reading = self._create_meter_reading(
             name="current",
             description="Battery Total Current",
             value=current_value,
             timestamp=ts,
             reading_type=self._create_current_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("current") if reading_mrids else None,
-        ))
+            skip_if_no_mrid=skip_missing_mrids,
+        )
+        if reading:
+            readings.append(reading)
         
         # Power Reading (0.1kW = 100W units from CUBE)
         # Register 4002: total_power (0.1kW)
         power_value = int(snapshot.system.total_power * 10)  # Convert kW to 0.1kW
-        readings.append(self._create_meter_reading(
+        reading = self._create_meter_reading(
             name="power",
             description="Battery Total Power",
             value=power_value,
             timestamp=ts,
             reading_type=self._create_power_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("power") if reading_mrids else None,
-        ))
+            skip_if_no_mrid=skip_missing_mrids,
+        )
+        if reading:
+            readings.append(reading)
         
         # Charge Energy Reading (0.1kWh = 100Wh units)
         # Register 4003: deliy_CHG (0.1kWh) - daily charge energy
         # Note: Need to get this from ContainerData if available
         charge_energy = getattr(snapshot.system, 'charge_energy', 0)
         charge_value = int(charge_energy * 10)  # Convert kWh to 0.1kWh
-        readings.append(self._create_meter_reading(
+        reading = self._create_meter_reading(
             name="charge_energy",
             description="Battery Charge Energy",
             value=charge_value,
             timestamp=ts,
             reading_type=self._create_charge_energy_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("charge_energy") if reading_mrids else None,
-        ))
+            skip_if_no_mrid=skip_missing_mrids,
+        )
+        if reading:
+            readings.append(reading)
         
         # Discharge Energy Reading (0.1kWh = 100Wh units)
         # Register 4004: deliy_DSC (0.1kWh) - daily discharge energy
         discharge_energy = getattr(snapshot.system, 'discharge_energy', 0)
         discharge_value = int(discharge_energy * 10)  # Convert kWh to 0.1kWh
-        readings.append(self._create_meter_reading(
+        reading = self._create_meter_reading(
             name="discharge_energy",
             description="Battery Discharge Energy",
             value=discharge_value,
             timestamp=ts,
             reading_type=self._create_discharge_energy_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("discharge_energy") if reading_mrids else None,
-        ))
+            skip_if_no_mrid=skip_missing_mrids,
+        )
+        if reading:
+            readings.append(reading)
         
         # Max Temperature Reading (1°C units)
         # Register 4016: all_max_t (1°C)
         max_temp = getattr(snapshot.system, 'max_temperature', 0)
         max_temp_value = int(max_temp)  # 1°C units
-        readings.append(self._create_meter_reading(
+        reading = self._create_meter_reading(
             name="max_temperature",
             description="Battery Max Temperature",
             value=max_temp_value,
             timestamp=ts,
             reading_type=self._create_max_temperature_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("max_temperature") if reading_mrids else None,
-        ))
+            skip_if_no_mrid=skip_missing_mrids,
+        )
+        if reading:
+            readings.append(reading)
         
         # Min Temperature Reading (1°C units)
         # Register 4017: all_min_t (1°C)
         min_temp = getattr(snapshot.system, 'min_temperature', 0)
         min_temp_value = int(min_temp)  # 1°C units
-        readings.append(self._create_meter_reading(
+        reading = self._create_meter_reading(
             name="min_temperature",
             description="Battery Min Temperature",
             value=min_temp_value,
             timestamp=ts,
             reading_type=self._create_min_temperature_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("min_temperature") if reading_mrids else None,
-        ))
+            skip_if_no_mrid=skip_missing_mrids,
+        )
+        if reading:
+            readings.append(reading)
         
         # Average Temperature Reading (1°C units)
         # Calculated from max and min temperature
         avg_temp = (max_temp + min_temp) / 2
         avg_temp_value = int(avg_temp)  # 1°C units
-        readings.append(self._create_meter_reading(
+        reading = self._create_meter_reading(
             name="avg_temperature",
             description="Battery Avg Temperature",
             value=avg_temp_value,
             timestamp=ts,
             reading_type=self._create_avg_temperature_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("avg_temperature") if reading_mrids else None,
-        ))
+            skip_if_no_mrid=skip_missing_mrids,
+        )
+        if reading:
+            readings.append(reading)
         
         # SOH Reading (0.1% units, UOM=0)
         # Calculate from active racks if not provided
@@ -477,36 +502,45 @@ class MirrorUsagePointAdapter:
             else:
                 soh = 100.0  # Default if no active racks
         soh_value = int(soh * 10)  # Convert % to 0.1% units
-        readings.append(self._create_meter_reading(
+        reading = self._create_meter_reading(
             name="soh",
             description="Battery SOH",
             value=soh_value,
             timestamp=ts,
             reading_type=self._create_soh_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("soh") if reading_mrids else None,
-        ))
+            skip_if_no_mrid=skip_missing_mrids,
+        )
+        if reading:
+            readings.append(reading)
         
         # Cycle Count Reading (integer count, UOM=0)
         cycle_value = cycle_count if cycle_count is not None else 0
-        readings.append(self._create_meter_reading(
+        reading = self._create_meter_reading(
             name="cycle_count",
             description="Battery Cycle Count",
             value=cycle_value,
             timestamp=ts,
             reading_type=self._create_cycle_count_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("cycle_count") if reading_mrids else None,
-        ))
+            skip_if_no_mrid=skip_missing_mrids,
+        )
+        if reading:
+            readings.append(reading)
         
         # Timestamp Reading (Unix epoch seconds)
         # Reports current BMS timestamp for synchronization verification
-        readings.append(self._create_meter_reading(
+        reading = self._create_meter_reading(
             name="timestamp",
             description="BMS Timestamp",
             value=ts,  # Unix timestamp in seconds
             timestamp=ts,
             reading_type=self._create_timestamp_reading_type().ReadingType if include_reading_type else None,
             mrid=reading_mrids.get("timestamp") if reading_mrids else None,
-        ))
+            skip_if_no_mrid=skip_missing_mrids,
+        )
+        if reading:
+            readings.append(reading)
         
         return readings
 
@@ -518,7 +552,8 @@ class MirrorUsagePointAdapter:
         timestamp: int,
         reading_type: Optional[ReadingType] = None,
         mrid: Optional[str] = None,
-    ) -> MirrorMeterReading:
+        skip_if_no_mrid: bool = False,
+    ) -> Optional[MirrorMeterReading]:
         """
         Create a MirrorMeterReading with a single reading value.
         
@@ -535,10 +570,17 @@ class MirrorUsagePointAdapter:
             reading_type: ReadingType for this reading. Should be None for
                           periodic updates (omit after registration).
             mrid: Optional existing mRID (from cache or server)
+            skip_if_no_mrid: If True and mrid is None, return None instead
+                             of generating a new mRID (Layer 3 partial upload).
             
         Returns:
-            MirrorMeterReading ready for upload
+            MirrorMeterReading ready for upload, or None if skipped.
         """
+        # Layer 3: skip this reading if mRID is missing and caller requested partial upload
+        if skip_if_no_mrid and mrid is None:
+            logger.debug(f"Skipping reading '{name}' — no mRID and skip_if_no_mrid=True")
+            return None
+
         # Use provided mRID, or generate stable mRID based on name
         final_mrid = mrid or self._generate_stable_mrid(name)
         

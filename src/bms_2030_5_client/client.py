@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Optional, Callable, List, Union, Dict
 from pathlib import Path
 
@@ -178,6 +179,12 @@ class BMSClient:
         self._metering_consecutive_failures: int = 0
         self._ieee2030_5_failure_threshold: int = 3  # trigger reconnect after N failures
 
+        # mRID recovery tracking (Layer 2 cooldown + Layer 4 partial upload counter)
+        self._last_mrid_recovery_attempt: float = 0.0  # monotonic timestamp
+        self._mrid_recovery_cooldown: float = 1800.0  # 30 minutes
+        self._partial_upload_count: int = 0  # consecutive partial uploads
+        self._partial_upload_threshold: int = 10  # trigger full re-registration
+
         # Task supervisor for background task resilience
         self._supervisor = TaskSupervisor()
     
@@ -281,6 +288,8 @@ class BMSClient:
             return "soh"
         elif "cycle" in name:
             return "cycle_count"
+        elif "timestamp" in name:
+            return "timestamp"
         return None
     
     def _cache_reading_mrids_from_server(self, readings: list) -> int:
@@ -405,6 +414,28 @@ class BMSClient:
                                 if key:
                                     self._reading_mrids[key] = r.mrid
                         logger.info(f"[Fast Recovery] Loaded {len(self._reading_mrids)} cached reading mRIDs: {list(self._reading_mrids.keys())}")
+                    
+                    # Layer 1: Fallback to meter_types table if mirror_meter_reading incomplete
+                    expected_keys = {
+                        "current", "power", "charge_energy", "discharge_energy",
+                        "max_temperature", "min_temperature", "avg_temperature",
+                        "soh", "cycle_count", "timestamp",
+                    }
+                    missing = expected_keys - set(self._reading_mrids.keys())
+                    if missing and self._mup_href:
+                        meter_types = self._db.get_meter_types(self._mup_href)
+                        fallback_count = 0
+                        for mt in meter_types:
+                            if mt.mrid and mt.description:
+                                key = self._description_to_reading_key(mt.description)
+                                if key and key in missing:
+                                    self._reading_mrids[key] = mt.mrid
+                                    fallback_count += 1
+                        if fallback_count:
+                            logger.info(
+                                f"[Fast Recovery] Filled {fallback_count} mRIDs from meter_types fallback: "
+                                f"{list(self._reading_mrids.keys())}"
+                            )
                 
                 return True
         
@@ -516,6 +547,115 @@ class BMSClient:
                 logger.warning(f"Failed to save MirrorMeterReading to database: {e}")
         
         logger.info(f"Saved {saved_count} MirrorMeterReadings to database for MUP: {mup_href}")
+
+    async def _recover_reading_mrids_from_server(self) -> bool:
+        """
+        Layer 2: Lightweight mRID recovery from server during upload.
+
+        Unlike _recover_from_server() (used at startup), this only does:
+        GET /upt → find matching UsagePoint → GET /upt/{id}/mr → sync mRIDs.
+        Respects cooldown (_mrid_recovery_cooldown) to avoid hammering server.
+
+        Returns:
+            True if any mRIDs were recovered
+        """
+        now = time.monotonic()
+        if now - self._last_mrid_recovery_attempt < self._mrid_recovery_cooldown:
+            return False
+        self._last_mrid_recovery_attempt = now
+
+        if not self._mup_mrid:
+            logger.warning("[mRID Recovery] No MUP mRID available, cannot recover")
+            return False
+
+        logger.info("[mRID Recovery] Attempting lightweight mRID sync from server...")
+
+        # Step 1: GET /upt → find UsagePoint matching our MUP mRID
+        upt_href = None
+        try:
+            upt_list = await self.ieee2030_5_client.get_usage_point_list()
+            for upt in (upt_list.UsagePoint or []):
+                if upt.mRID and upt.mRID.upper() == self._mup_mrid.upper():
+                    upt_href = upt.href
+                    break
+            if not upt_href:
+                logger.warning("[mRID Recovery] No matching UsagePoint found on server")
+                return False
+        except Exception as e:
+            logger.warning(f"[mRID Recovery] Failed to GET /upt: {e}")
+            return False
+
+        # Step 2: GET /upt/{id}/mr → get MeterReadingList
+        try:
+            mr_list = await self.ieee2030_5_client.get_meter_reading_list(upt_href)
+            mr_entries = mr_list.MeterReading or []
+        except Exception as e:
+            logger.warning(f"[mRID Recovery] Failed to GET {upt_href}/mr: {e}")
+            return False
+
+        # Step 3: Cache recovered mRIDs + write to DB
+        recovered = 0
+        for mr_entry in mr_entries:
+            if not mr_entry.description or not mr_entry.mRID:
+                continue
+            key = self._description_to_reading_key(mr_entry.description)
+            if key and key not in self._reading_mrids:
+                self._reading_mrids[key] = mr_entry.mRID
+                recovered += 1
+
+        if recovered:
+            logger.info(
+                f"[mRID Recovery] Recovered {recovered} mRIDs from server: "
+                f"{list(self._reading_mrids.keys())}"
+            )
+            self._sync_reading_mrids_to_db()
+        else:
+            logger.info("[mRID Recovery] No new mRIDs recovered from server")
+
+        return recovered > 0
+
+    def _sync_reading_mrids_to_db(self) -> None:
+        """
+        Defense C: Persist current _reading_mrids to mirror_meter_reading table.
+
+        Called after successful upload or mRID recovery to ensure DB stays fresh.
+        Uses (mup_href, description) as upsert key — same as save_mirror_meter_reading().
+        """
+        if not self._db or not self._mup_href:
+            return
+
+        # Reverse map: reading key → description (for DB storage)
+        key_to_description = {
+            "current": "Battery Total Current",
+            "power": "Battery Total Power",
+            "charge_energy": "Battery Charge Energy",
+            "discharge_energy": "Battery Discharge Energy",
+            "max_temperature": "Battery Max Temperature",
+            "min_temperature": "Battery Min Temperature",
+            "avg_temperature": "Battery Avg Temperature",
+            "soh": "Battery SOH",
+            "cycle_count": "Battery Cycle Count",
+            "timestamp": "BMS Timestamp",
+        }
+
+        synced = 0
+        for key, mrid in self._reading_mrids.items():
+            desc = key_to_description.get(key)
+            if not desc:
+                continue
+            try:
+                record = MirrorMeterReadingRecord(
+                    mup_href=self._mup_href,
+                    mrid=mrid,
+                    description=desc,
+                )
+                self._db.save_mirror_meter_reading(record)
+                synced += 1
+            except Exception as e:
+                logger.warning(f"[DB Sync] Failed to sync mRID for {key}: {e}")
+
+        if synced:
+            logger.debug(f"[DB Sync] Synced {synced} reading mRIDs to database")
 
     def add_callback(self, callback: Callable[[BMSSnapshot], None]) -> None:
         """Add callback for new BMS data."""
@@ -1541,7 +1681,15 @@ class BMSClient:
             await asyncio.sleep(poll_rate)
 
     async def _upload_meter_readings(self) -> None:
-        """Upload current BMS meter readings to IEEE 2030.5 server."""
+        """
+        Upload current BMS meter readings to IEEE 2030.5 server.
+
+        Uses a 4-layer mRID recovery strategy to avoid generating random mRIDs:
+          Layer 1: meter_types DB fallback (handled at startup in _load_cached_resources)
+          Layer 2: Lightweight server recovery (GET /upt → GET /mr) with cooldown
+          Layer 3: Partial upload — skip readings with missing mRIDs
+          Layer 4: Full re-registration (last resort, after N consecutive partial uploads)
+        """
         snapshot = self.latest_snapshot
         if not snapshot:
             logger.warning("No BMS data available for metering")
@@ -1562,51 +1710,109 @@ class BMSClient:
                 soc_delta = current_soc - self._last_soc
                 
                 if soc_delta > 0:
-                    # Charging: accumulate charge %
                     self._charge_accumulated += soc_delta
                 elif soc_delta < 0:
-                    # Discharging: accumulate discharge %
                     self._discharge_accumulated += abs(soc_delta)
                 
-                # Check if a complete cycle is reached (charge >10% AND discharge >10%)
                 if self._charge_accumulated >= 10.0 and self._discharge_accumulated >= 10.0:
                     self._cycle_count += 1
-                    # Reset accumulators, keeping excess
                     self._charge_accumulated -= 10.0
                     self._discharge_accumulated -= 10.0
                     logger.info(f"Cycle completed! Total cycles: {self._cycle_count}")
             
             self._last_soc = current_soc
-            
-            # Save cycle tracking data to persistent storage
             self._save_cycle_tracking()
 
-        # Log reading mRIDs status for debugging
+        # --- mRID completeness check ---
+        expected_keys = {
+            "current", "power", "charge_energy", "discharge_energy",
+            "max_temperature", "min_temperature", "avg_temperature",
+            "soh", "cycle_count", "timestamp",
+        }
+        missing_keys = expected_keys - set(self._reading_mrids.keys())
+        mrids_complete = len(missing_keys) == 0
+
         if self._reading_mrids:
             logger.debug(f"Using cached reading mRIDs: {list(self._reading_mrids.keys())}")
-        else:
-            logger.warning("No cached reading mRIDs available - new mRIDs will be generated!")
+        if missing_keys:
+            logger.info(f"[mRID Check] Missing keys: {missing_keys}")
 
-        # Convert BMS snapshot to meter readings (including SOH and cycle_count)
+        # --- Layer 2: Lightweight server recovery (if incomplete) ---
+        if not mrids_complete:
+            recovered = await self._recover_reading_mrids_from_server()
+            if recovered:
+                missing_keys = expected_keys - set(self._reading_mrids.keys())
+                mrids_complete = len(missing_keys) == 0
+                if mrids_complete:
+                    logger.info("[Layer 2] Server recovery restored all mRIDs")
+                else:
+                    logger.info(f"[Layer 2] Server recovery partial, still missing: {missing_keys}")
+
+        # --- Decide upload mode ---
+        skip_missing = False
+        needs_reading_type = False
+
+        if mrids_complete:
+            # Happy path: all mRIDs present, no ReadingType needed
+            self._partial_upload_count = 0
+        else:
+            # --- Layer 4 check: too many consecutive partial uploads → full re-registration ---
+            if self._partial_upload_count >= self._partial_upload_threshold:
+                logger.warning(
+                    f"[Layer 4] {self._partial_upload_count} consecutive partial uploads — "
+                    f"triggering full re-registration (last resort)"
+                )
+                try:
+                    # Clear state and re-register with ReadingType + new mRIDs
+                    self._reading_mrids.clear()
+                    self._mup_href = None
+                    await self._register_meter()
+                    self._partial_upload_count = 0
+                    # After re-registration, mRIDs should be complete
+                    missing_keys = expected_keys - set(self._reading_mrids.keys())
+                    mrids_complete = len(missing_keys) == 0
+                    if not mrids_complete:
+                        logger.warning(f"[Layer 4] Re-registration done but still missing: {missing_keys}")
+                        skip_missing = True
+                        needs_reading_type = False
+                    else:
+                        logger.info("[Layer 4] Re-registration restored all mRIDs")
+                except Exception as e:
+                    logger.error(f"[Layer 4] Full re-registration failed: {e}")
+                    skip_missing = True
+                    needs_reading_type = False
+            else:
+                # --- Layer 3: partial upload — skip missing mRIDs ---
+                self._partial_upload_count += 1
+                skip_missing = True
+                needs_reading_type = False
+                logger.info(
+                    f"[Layer 3] Partial upload ({self._partial_upload_count}/"
+                    f"{self._partial_upload_threshold}), skipping: {missing_keys}"
+                )
+
+        # Convert BMS snapshot to meter readings
         readings = self.adapter.snapshot_to_meter_readings(
             snapshot,
             reading_mrids=self._reading_mrids,
             soh=soh,
             cycle_count=self._cycle_count,
+            include_reading_type=needs_reading_type,
+            skip_missing_mrids=skip_missing,
         )
         
-        # Log actual mRIDs used
         if readings and logger.isEnabledFor(logging.DEBUG):
             mrid_list = [(r.description, r.mRID) for r in readings]
             logger.debug(f"Meter readings mRIDs: {mrid_list}")
 
-        # Upload all readings as a list
+        # Upload
+        soh_str = f"SOH={soh:.1f}%, " if soh else ""
         logger.info(
             f"Uploading meter readings to {self._mup_href}: "
             f"SOC={snapshot.system.total_soc:.1f}%, "
             f"Current={snapshot.system.total_current:.1f}A, "
             f"Power={snapshot.system.total_power:.1f}kW, "
-            f"SOH={soh:.1f}% " if soh else ""
+            f"{soh_str}"
             f"Cycles={self._cycle_count}, "
             f"readings_count={len(readings)}"
         )
@@ -1617,11 +1823,12 @@ class BMSClient:
                 readings,
             )
             
-            # Record to data recorder
             self._record_meter_upload(readings, success)
             
             if success:
                 logger.info(f"Successfully uploaded {len(readings)} meter readings")
+                # Defense C: persist current mRIDs to DB after successful upload
+                self._sync_reading_mrids_to_db()
             else:
                 logger.warning("Failed to upload meter readings as list")
         else:
