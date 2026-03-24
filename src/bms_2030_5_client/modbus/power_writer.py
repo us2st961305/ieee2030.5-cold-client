@@ -101,6 +101,9 @@ class ModbusPowerWriterConfig:
     # PCS 暫存器位址配置
     power_setpoint_address: int = PCSRegisterAddress.POWER_SETPOINT
     
+    # 32-bit power setpoint (write two consecutive registers)
+    use_32bit_power: bool = False
+    
     # Power scale: W (input) → 0.1 kW (register)
     # 50000 W × 0.01 = 500 → register value 500 = 50.0 kW
     power_scale_factor: float = 0.01
