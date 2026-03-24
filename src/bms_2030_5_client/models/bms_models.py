@@ -287,3 +287,13 @@ class BMSSnapshot:
     def has_alarms(self) -> bool:
         """Check if any rack has alarms."""
         return any(r.alarm_status != 0 for r in self.racks)
+
+    def to_dict(self) -> dict:
+        """Serialize snapshot to dict for JSON API."""
+        return {
+            "voltage": self.system.total_voltage,
+            "current": self.system.total_current,
+            "soc": self.system.total_soc,
+            "power": self.system.total_power,
+            "timestamp": self.timestamp.isoformat(),
+        }
