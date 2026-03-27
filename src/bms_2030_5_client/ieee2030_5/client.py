@@ -332,8 +332,15 @@ class IEEE2030_5Client:
         resource_type = self._detect_resource_type(path)
         
         try:
+            logger.debug(f">>> GET {path} [{resource_type}]")
             response = await self._client.get(path)
             response_time_ms = (time.time() - start_time) * 1000
+            logger.debug(
+                f"<<< GET {path} | status={response.status_code} | "
+                f"{response_time_ms:.0f}ms | headers={dict(response.headers)}"
+            )
+            if response.text:
+                logger.debug(f"<<< GET {path} body:\n{sanitize_xml_for_log(response.text)}")
             response.raise_for_status()
             
             # 記錄請求
@@ -401,11 +408,18 @@ class IEEE2030_5Client:
         
         try:
             xml_data = dataclass_to_xml(data)
-            logger.debug(f"POST {path} Request:\n{sanitize_xml_for_log(xml_data)}")
+            logger.debug(
+                f">>> POST {path} [{resource_type}]\n"
+                f"    headers={dict(self._client.headers)}\n"
+                f"    body:\n{sanitize_xml_for_log(xml_data)}"
+            )
             response = await self._client.post(path, content=xml_data)
             response_time_ms = (time.time() - start_time) * 1000
-            logger.debug(f"POST {path} Response Status: {response.status_code}")
-            logger.debug(f"POST {path} Response Body:\n{sanitize_xml_for_log(response.text)}")
+            logger.debug(
+                f"<<< POST {path} | status={response.status_code} | "
+                f"{response_time_ms:.0f}ms | headers={dict(response.headers)}\n"
+                f"    body:\n{sanitize_xml_for_log(response.text)}"
+            )
             response.raise_for_status()
             
             # 記錄請求
@@ -465,9 +479,18 @@ class IEEE2030_5Client:
         
         try:
             xml_data = dataclass_to_xml(data)
-            logger.debug(f"PUT {path} XML:\n{sanitize_xml_for_log(xml_data)}")
+            logger.debug(
+                f">>> PUT {path} [{resource_type}]\n"
+                f"    headers={dict(self._client.headers)}\n"
+                f"    body:\n{sanitize_xml_for_log(xml_data)}"
+            )
             response = await self._client.put(path, content=xml_data)
             response_time_ms = (time.time() - start_time) * 1000
+            logger.debug(
+                f"<<< PUT {path} | status={response.status_code} | "
+                f"{response_time_ms:.0f}ms | headers={dict(response.headers)}\n"
+                f"    body:\n{sanitize_xml_for_log(response.text)}"
+            )
             response.raise_for_status()
             
             # 記錄請求

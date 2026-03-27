@@ -329,14 +329,14 @@ class ModbusWriter:
                 response = self._client.write_register(
                     address=address,
                     value=raw_registers[0],
-                    slave=unit_id,
+                    device_id=unit_id,
                 )
             else:
                 # 多個寄存器 - 使用 write_registers (FC 0x10)
                 response = self._client.write_registers(
                     address=address,
                     values=raw_registers,
-                    slave=unit_id,
+                    device_id=unit_id,
                 )
             
             latency = (time.time() - start_time) * 1000

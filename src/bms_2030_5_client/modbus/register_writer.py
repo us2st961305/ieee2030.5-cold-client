@@ -283,14 +283,14 @@ class ModbusRegisterWriter:
                     result = await self._client.write_register(
                         address=address,
                         value=raw_values[0],
-                        slave=self.unit_id,
+                        device_id=self.unit_id,
                     )
                 else:
                     # Multiple register write
                     result = await self._client.write_registers(
                         address=address,
                         values=raw_values,
-                        slave=self.unit_id,
+                        device_id=self.unit_id,
                     )
                 
                 latency = (time.perf_counter() - start_time) * 1000

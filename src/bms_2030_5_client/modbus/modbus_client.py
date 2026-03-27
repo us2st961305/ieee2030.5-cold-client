@@ -75,6 +75,38 @@ class ModbusHealthStatus:
         }
 
 
+# Register name lookup for debug logging
+_REGISTER_NAMES: dict[int, str] = {
+    3999: "SYS_BASE (Doc:4000)",
+    6999: "RACK_BASE (Doc:7000)",
+    7848: "PCS_STATE",
+    7850: "PCS_ON",
+    7851: "PCS_OFF",
+    7852: "P_SET (0.1kW)",
+    7853: "Q_SET (0.1kVAR)",
+    7854: "PCS_ALARM",
+    7855: "PCS_P_READ (0.1kW)",
+    7856: "PCS_Q_READ (0.1kVAR)",
+    7857: "FREQ (0.1Hz)",
+}
+
+
+def _describe_register(address: int) -> str:
+    """Return human-readable register name for logging."""
+    if address in _REGISTER_NAMES:
+        return f"{address}({_REGISTER_NAMES[address]})"
+    # Check rack range
+    if 6999 <= address < 6999 + 24 * 30:
+        rack_id = (address - 6999) // 30
+        offset = (address - 6999) % 30
+        return f"{address}(Rack{rack_id}+{offset})"
+    # Check system range
+    if 3999 <= address < 3999 + 50:
+        offset = address - 3999
+        return f"{address}(Sys+{offset})"
+    return str(address)
+
+
 class ModbusBMSClient:
     """
     Modbus TCP client for CUBE BMS.
@@ -218,12 +250,17 @@ class ModbusBMSClient:
                     response = await self._client.read_holding_registers(
                         address=address,
                         count=count,
-                        slave=self.unit_id,
+                        device_id=self.unit_id,
                     )
                     if response.isError():
                         raise ModbusClientError(
                             f"Modbus error reading address {address}: {response}"
                         )
+                    logger.debug(
+                        f"MODBUS_READ | addr={_describe_register(address)} | "
+                        f"count={count} | values={list(response.registers)[:10]}"
+                        f"{'...' if count > 10 else ''}"
+                    )
                     return list(response.registers)
                 except (ModbusException, ModbusClientError) as e:
                     last_error = e
@@ -262,17 +299,20 @@ class ModbusBMSClient:
                     response = await self._client.write_register(
                         address=address,
                         value=value,
-                        slave=self.unit_id,
+                        device_id=self.unit_id,
                     )
                     if response.isError():
                         logger.error(
-                            f"Modbus error writing address {address}: {response}"
+                            f"Modbus error writing {_describe_register(address)}={value}: {response}"
                         )
                         if attempt < self._read_max_retries - 1:
                             delay = self._read_retry_base_delay * (2 ** attempt)
                             await asyncio.sleep(delay)
                             continue
                         return False
+                    logger.debug(
+                        f"MODBUS_WRITE | addr={_describe_register(address)} | value={value}"
+                    )
                     return True
                 except ModbusException as e:
                     logger.error(
