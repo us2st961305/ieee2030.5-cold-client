@@ -338,13 +338,13 @@ class ModbusPowerWriter:
     
     async def disconnect(self, reason: str = "opModConnect=false") -> PowerWriteResult:
         """
-        Disconnect PCS: zero power then pulse PCS_OFF.
+        Disconnect PCS: zero power only (P_SET=0).
 
         Corresponds to IEEE 2030.5 DERControlBase.opModConnect=false.
 
         Steps:
         1. P_SET (7852) = 0  — zero power setpoint
-        2. PCS_OFF (7851) = 1  — pulse to shut down PCS
+        (PCS_OFF pulse is intentionally skipped)
 
         Args:
             reason: Disconnect reason description.
@@ -359,43 +359,8 @@ class ModbusPowerWriter:
 
         # Step 1: 功率歸零
         power_result = await self.set_power(0, source=f"disconnect:{reason}")
-        if not power_result.success:
-            return power_result
 
-        # Step 2: Pulse PCS_OFF to shut down
-        try:
-            off_success = await self.modbus_client.write_register(
-                PCSRegisterAddress.PCS_OFF,
-                1,  # pulse
-            )
-            if off_success:
-                power_audit_logger.info(
-                    f"DISCONNECT_PCS_OFF | "
-                    f"register={PCSRegisterAddress.PCS_OFF} | value=1 (pulse)"
-                )
-            else:
-                power_audit_logger.error(
-                    f"DISCONNECT_PCS_OFF_FAILED | "
-                    f"register={PCSRegisterAddress.PCS_OFF}"
-                )
-                return PowerWriteResult(
-                    success=False,
-                    simulated=False,
-                    requested_power_w=0,
-                    timestamp=datetime.now(timezone.utc),
-                    error_message="Failed to pulse PCS_OFF",
-                )
-        except Exception as e:
-            power_audit_logger.error(
-                f"DISCONNECT_PCS_OFF_ERROR | error={e}"
-            )
-            return PowerWriteResult(
-                success=False,
-                simulated=False,
-                requested_power_w=0,
-                timestamp=datetime.now(timezone.utc),
-                error_message=f"PCS_OFF write error: {e}",
-            )
+        # Step 2: PCS_OFF pulse intentionally skipped
 
         return power_result
     

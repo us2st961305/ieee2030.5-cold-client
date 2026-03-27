@@ -210,6 +210,9 @@ class DERClient:
             maxlen=self.config.processed_event_retention
         )
         
+        # 已處理 cancel 的事件 ID（避免重複回報 EVENT_CANCELLED）
+        self._cancelled_mRIDs: set[str] = set()
+        
         # 當前活動的 DefaultDERControl
         self._active_default: Optional[DefaultDERControl] = None
         self._active_default_program: Optional[DERProgram] = None
@@ -620,12 +623,13 @@ class DERClient:
             if (
                 control.EventStatus
                 and control.EventStatus.currentStatus == 2
+                and ctrl_id not in self._cancelled_mRIDs
             ):
                 logger.info(
                     f"Server cancelled detected for {ctrl_id}, "
                     f"processing cancel"
                 )
-                self._processed_mRIDs.remove(ctrl_id)
+                self._cancelled_mRIDs.add(ctrl_id)
                 await self._handle_server_cancel(ctrl_id)
             return
         
