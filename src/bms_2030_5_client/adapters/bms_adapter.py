@@ -310,6 +310,7 @@ class BMSAdapter:
         soh: Optional[float] = None,
         cycle_count: Optional[int] = None,
         include_reading_type: bool = False,
+        skip_missing_mrids: bool = False,
     ) -> List[MirrorMeterReading]:
         """
         Convert BMS snapshot to meter readings for upload.
@@ -327,6 +328,8 @@ class BMSAdapter:
             cycle_count: Optional cycle count value, if None uses 0
             include_reading_type: Whether to include ReadingType in readings.
                                   Should be False for periodic updates (default).
+            skip_missing_mrids: If True, skip readings with no cached mRID
+                                instead of generating a new one (Layer 3).
             
         Returns:
             List of MirrorMeterReading objects ready for upload
@@ -334,4 +337,5 @@ class BMSAdapter:
         return self._mup_adapter.snapshot_to_meter_readings(
             snapshot, reading_mrids, soh=soh, cycle_count=cycle_count,
             include_reading_type=include_reading_type,
+            skip_missing_mrids=skip_missing_mrids,
         )
