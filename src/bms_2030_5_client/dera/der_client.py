@@ -52,14 +52,6 @@ from bms_2030_5_client.power_control import (
     EmergencyStop,
 )
 
-# Import control history recorder (optional, for web UI)
-try:
-    from bms_2030_5_client.web.der_control_history import get_der_control_history
-    _has_history_recorder = True
-except ImportError:
-    _has_history_recorder = False
-    get_der_control_history = None
-
 logger = logging.getLogger(__name__)
 
 
@@ -358,9 +350,6 @@ class DERClient:
                     logger.info(f"New FSA discovered: {fsa_id}")
                     self._tracked_fsa[fsa_id] = fsa
                     
-                    # 記錄 FSA 到歷史（供 Web UI 顯示）
-                    self._record_fsa_to_history(fsa)
-                    
                     # 處理新 FSA 的 DERProgram
                     await self._process_fsa_programs(fsa)
                 else:
@@ -370,18 +359,12 @@ class DERClient:
                         logger.info(f"FSA updated: {fsa_id}")
                         self._tracked_fsa[fsa_id] = fsa
                         
-                        # 記錄 FSA 更新到歷史
-                        self._record_fsa_to_history(fsa)
-                        
                         await self._process_fsa_programs(fsa)
             
             # 檢查被移除的 FSA
             removed_fsa_ids = set(self._tracked_fsa.keys()) - current_fsa_ids
             for fsa_id in removed_fsa_ids:
                 logger.info(f"FSA removed: {fsa_id}")
-                
-                # 記錄 FSA 移除到歷史
-                self._record_fsa_removed(fsa_id)
                 
                 await self._handle_fsa_removed(fsa_id)
                 del self._tracked_fsa[fsa_id]
@@ -412,9 +395,6 @@ class DERClient:
             
             # 限制計畫數量
             programs = program_list.DERProgram[:self.config.max_programs]
-            
-            # 更新 FSA 的 program 數量
-            self._update_fsa_program_count(fsa_id, len(programs))
             
             for program in programs:
                 await self._track_program(program, fsa_id=fsa_id)
@@ -467,9 +447,6 @@ class DERClient:
                 f"(primacy={program.primacy})"
             )
         
-        # 記錄 DERProgram 到歷史（供 Web UI 顯示）
-        self._record_program_to_history(program, fsa_id)
-        
         # 取得 DefaultDERControl
         await self._fetch_default_control(prog_id)
     
@@ -484,9 +461,6 @@ class DERClient:
         
         tracked = self._tracked_programs[prog_id]
         logger.info(f"Untracking program: {prog_id}")
-        
-        # 記錄 DERProgram 移除到歷史
-        self._record_program_removed(prog_id)
         
         # 取消相關控制
         controls_to_cancel = [
@@ -637,37 +611,6 @@ class DERClient:
             f"New DERControl: {ctrl_id} "
             f"(program_primacy={program.primacy})"
         )
-        
-        # 記錄到歷史（供 Web UI 顯示）
-        if _has_history_recorder:
-            try:
-                history = get_der_control_history()
-                control_type = "unknown"
-                power_w = control.get_power_setpoint_w()
-                if control.DERControlBase:
-                    if control.DERControlBase.opModFixedW:
-                        control_type = "opModFixedW"
-                    elif control.DERControlBase.opModFixedVar:
-                        control_type = "opModFixedVar"
-                    elif control.DERControlBase.opModMaxLimW:
-                        control_type = "opModMaxLimW"
-                    elif control.DERControlBase.opModEnergize is not None:
-                        control_type = "opModEnergize"
-                    elif control.DERControlBase.opModConnect is not None:
-                        control_type = "opModConnect"
-                
-                history.record_control_received(
-                    control_id=ctrl_id,
-                    source="polling",
-                    program_id=program.mRID,
-                    primacy=program.primacy,
-                    control_type=control_type,
-                    power_setpoint_w=power_w,
-                    interval_start=control.interval.start if control.interval else None,
-                    interval_duration=control.interval.duration if control.interval else None,
-                )
-            except Exception as e:
-                logger.debug(f"Failed to record control history: {e}")
         
         # 計算隨機化的開始時間
         randomized_start = self._calculate_randomized_start(control)
@@ -823,19 +766,6 @@ class DERClient:
                 tracked.status = DERControlEventStatus.COMPLETED
                 self._stats["controls_executed"] += 1
                 
-                # 記錄執行結果到歷史
-                if _has_history_recorder:
-                    try:
-                        history = get_der_control_history()
-                        history.update_control_executed(
-                            control_id=ctrl_id,
-                            success=True,
-                            simulated=event.result.simulated if event.result else True,
-                            message=event.result.message if event.result else None,
-                        )
-                    except Exception as e:
-                        logger.debug(f"Failed to update control history: {e}")
-                
                 # 發送「完成」回報
                 await self._send_response(
                     tracked,
@@ -843,19 +773,6 @@ class DERClient:
                 )
             else:
                 tracked.status = event.status
-                
-                # 記錄失敗結果
-                if _has_history_recorder:
-                    try:
-                        history = get_der_control_history()
-                        history.update_control_executed(
-                            control_id=ctrl_id,
-                            success=False,
-                            simulated=True,
-                            error=event.error_message,
-                        )
-                    except Exception as e:
-                        logger.debug(f"Failed to update control history: {e}")
                 
             logger.info(
                 f"Control {ctrl_id} executed: "
@@ -1272,18 +1189,6 @@ class DERClient:
             tracked.response_sent = True
             self._stats["responses_sent"] += 1
         
-        # 記錄回報到歷史
-        if _has_history_recorder:
-            try:
-                history = get_der_control_history()
-                ctrl_id = control.mRID or str(id(control))
-                history.update_response_sent(
-                    control_id=ctrl_id,
-                    response_status=status.name,
-                )
-            except Exception as e:
-                logger.debug(f"Failed to record response history: {e}")
-        
         return post_success
     
     # =========================================================================
@@ -1410,98 +1315,6 @@ class DERClient:
             return True
         
         return False
-    
-    # =========================================================================
-    # History Recording (for Web UI)
-    # =========================================================================
-    
-    def _record_fsa_to_history(self, fsa: FunctionSetAssignments) -> None:
-        """記錄 FSA 到歷史（供 Web UI 顯示）"""
-        if not _has_history_recorder:
-            return
-        
-        try:
-            history = get_der_control_history()
-            fsa_id = fsa.mRID or fsa.href or str(id(fsa))
-            
-            history.record_fsa(
-                fsa_id=fsa_id,
-                href=fsa.href,
-                description=fsa.description,
-                version=fsa.version or 0,
-                der_program_list_link=fsa.get_der_program_list_href(),
-                program_count=0,  # Will be updated when programs are discovered
-            )
-        except Exception as e:
-            logger.debug(f"Failed to record FSA history: {e}")
-    
-    def _record_fsa_removed(self, fsa_id: str) -> None:
-        """記錄 FSA 移除到歷史"""
-        if not _has_history_recorder:
-            return
-        
-        try:
-            history = get_der_control_history()
-            history.remove_fsa(fsa_id)
-        except Exception as e:
-            logger.debug(f"Failed to record FSA removal: {e}")
-    
-    def _update_fsa_program_count(self, fsa_id: str, program_count: int) -> None:
-        """更新 FSA 的 program 數量"""
-        if not _has_history_recorder:
-            return
-        
-        try:
-            history = get_der_control_history()
-            history.record_fsa(
-                fsa_id=fsa_id,
-                program_count=program_count,
-            )
-        except Exception as e:
-            logger.debug(f"Failed to update FSA program count: {e}")
-    
-    def _record_program_to_history(
-        self,
-        program: DERProgram,
-        fsa_id: Optional[str] = None
-    ) -> None:
-        """記錄 DERProgram 到歷史（供 Web UI 顯示）"""
-        if not _has_history_recorder:
-            return
-        
-        try:
-            history = get_der_control_history()
-            prog_id = program.mRID or program.href or str(id(program))
-            
-            # 計算 control 數量（從 Link 物件的 all 屬性取得）
-            control_count = 0
-            if program.DERControlListLink and hasattr(program.DERControlListLink, 'all'):
-                control_count = program.DERControlListLink.all or 0
-            
-            history.record_program(
-                program_id=prog_id,
-                href=program.href,
-                description=program.description,
-                primacy=program.primacy,
-                version=program.version or 0,
-                fsa_id=fsa_id,
-                der_control_list_link=program.get_der_control_list_href(),
-                default_der_control_link=program.get_default_der_control_href(),
-                control_count=control_count,
-            )
-        except Exception as e:
-            logger.debug(f"Failed to record program history: {e}")
-    
-    def _record_program_removed(self, program_id: str) -> None:
-        """記錄 DERProgram 移除到歷史"""
-        if not _has_history_recorder:
-            return
-        
-        try:
-            history = get_der_control_history()
-            history.remove_program(program_id)
-        except Exception as e:
-            logger.debug(f"Failed to record program removal: {e}")
     
     # =========================================================================
     # Utilities

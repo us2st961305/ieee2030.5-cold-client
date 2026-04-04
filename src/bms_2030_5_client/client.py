@@ -1982,20 +1982,6 @@ class BMSClient:
                     "timestamp": reading_timestamp,
                 })
         
-        # Record to in-memory data recorder (for stats counter)
-        try:
-            from bms_2030_5_client.web.data_recorder import get_data_recorder
-            recorder = get_data_recorder()
-            recorder.record_meter_upload(
-                mup_href=self._mup_href or "",
-                description="BMS Meter Readings",
-                readings=reading_dicts,
-                status_code=200 if success else 500,
-                success=success,
-            )
-        except Exception as e:
-            logger.debug(f"Failed to record to data_recorder: {e}")
-        
         # Record meter types to SQLite database (persistent, no values)
         try:
             if self._db and self._mup_href and reading_dicts:

@@ -18,7 +18,6 @@ pyyaml = "^6.0.1"
 dataclasses-json = "^0.6.4"
 xsdata = {extras = ["lxml"], version = "^24.0"}
 structlog = "^24.1.0"
-flask = "^3.0.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
@@ -30,7 +29,6 @@ ruff = "^0.2.0"
 
 [tool.poetry.scripts]
 bms-client = "bms_2030_5_client.main:main"
-bms-web = "bms_2030_5_client.web.cli:main"
 bms-unlock-production = "bms_2030_5_client.cli.unlock_production:main"
 
 [build-system]

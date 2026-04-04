@@ -254,61 +254,6 @@ class IEEE2030_5Client:
             return "Notification"
         else:
             return "Other"
-    
-    def _log_http_request(
-        self,
-        method: str,
-        path: str,
-        resource_type: str,
-        request_body: Optional[str],
-        response: Optional[httpx.Response],
-        response_time_ms: float,
-        error: Optional[str] = None,
-    ) -> None:
-        """Log HTTP request to history recorder."""
-        try:
-            from bms_2030_5_client.web.der_control_history import (
-                DERControlHistoryRecorder,
-                RequestType,
-            )
-            
-            recorder = DERControlHistoryRecorder()
-            
-            # 確定 request type
-            request_type_map = {
-                "GET": RequestType.GET,
-                "POST": RequestType.POST,
-                "PUT": RequestType.PUT,
-                "DELETE": RequestType.DELETE,
-            }
-            request_type = request_type_map.get(method, RequestType.GET)
-            
-            # 準備回應資料
-            response_code = response.status_code if response else 0
-            response_body = response.text if response else None
-            response_body_size = len(response.text) if response and response.text else 0
-            response_headers = dict(response.headers) if response else None
-            success = response_code < 400 if response else False
-            
-            recorder.log_request(
-                resource_type=resource_type,
-                uri=f"{self.server_url}{path}",
-                request_type=request_type,
-                request_headers={"Content-Type": "application/sep+xml", "Accept": "application/sep+xml"},
-                request_body=request_body,
-                response_code=response_code,
-                response_time_ms=response_time_ms,
-                response_body_size=response_body_size,
-                response_headers=response_headers,
-                response_body=response_body,
-                success=success,
-                error_message=error,
-            )
-        except ImportError:
-            # Web module not available
-            pass
-        except Exception as e:
-            logger.debug(f"Failed to log HTTP request: {e}")
 
     async def _get(
         self,
@@ -343,43 +288,15 @@ class IEEE2030_5Client:
                 logger.debug(f"<<< GET {path} body:\n{sanitize_xml_for_log(response.text)}")
             response.raise_for_status()
             
-            # 記錄請求
-            self._log_http_request(
-                method="GET",
-                path=path,
-                resource_type=resource_type,
-                request_body=None,
-                response=response,
-                response_time_ms=response_time_ms,
-            )
-            
             if response_type:
                 return xml_to_dataclass(response.text, response_type)
             return response.text
             
         except httpx.HTTPStatusError as e:
             response_time_ms = (time.time() - start_time) * 1000
-            self._log_http_request(
-                method="GET",
-                path=path,
-                resource_type=resource_type,
-                request_body=None,
-                response=e.response,
-                response_time_ms=response_time_ms,
-                error=str(e),
-            )
             raise IEEE2030_5ClientError(f"HTTP error: {e.response.status_code}") from e
         except Exception as e:
             response_time_ms = (time.time() - start_time) * 1000
-            self._log_http_request(
-                method="GET",
-                path=path,
-                resource_type=resource_type,
-                request_body=None,
-                response=None,
-                response_time_ms=response_time_ms,
-                error=str(e),
-            )
             raise IEEE2030_5ClientError(f"Request failed: {e}") from e
 
     async def _post(
@@ -422,16 +339,6 @@ class IEEE2030_5Client:
             )
             response.raise_for_status()
             
-            # 記錄請求
-            self._log_http_request(
-                method="POST",
-                path=path,
-                resource_type=resource_type,
-                request_body=xml_data,
-                response=response,
-                response_time_ms=response_time_ms,
-            )
-            
             location = response.headers.get("Location", "")
             
             if response_type and response.text:
@@ -444,15 +351,6 @@ class IEEE2030_5Client:
         except httpx.HTTPStatusError as e:
             response_time_ms = (time.time() - start_time) * 1000
             logger.error(f"POST {path} failed: HTTP {e.response.status_code}")
-            self._log_http_request(
-                method="POST",
-                path=path,
-                resource_type=resource_type,
-                request_body=xml_data,
-                response=e.response,
-                response_time_ms=response_time_ms,
-                error=str(e),
-            )
             raise IEEE2030_5ClientError(f"HTTP error: {e.response.status_code}") from e
 
     async def _put(
@@ -493,30 +391,11 @@ class IEEE2030_5Client:
             )
             response.raise_for_status()
             
-            # 記錄請求
-            self._log_http_request(
-                method="PUT",
-                path=path,
-                resource_type=resource_type,
-                request_body=xml_data,
-                response=response,
-                response_time_ms=response_time_ms,
-            )
-            
             return True
             
         except httpx.HTTPStatusError as e:
             response_time_ms = (time.time() - start_time) * 1000
             logger.error(f"PUT {path} failed: HTTP {e.response.status_code}")
-            self._log_http_request(
-                method="PUT",
-                path=path,
-                resource_type=resource_type,
-                request_body=xml_data,
-                response=e.response,
-                response_time_ms=response_time_ms,
-                error=str(e),
-            )
             return False
 
     # =========================================================================
@@ -695,54 +574,7 @@ class IEEE2030_5Client:
         status_path = f"{der_path}/ders"
         success = await self._put(status_path, status)
         
-        # Record to data recorder
-        self._record_der_status(der_path, status, success)
-        
         return success
-
-    def _record_der_status(self, der_path: str, status: DERStatus, success: bool) -> None:
-        """Record a DER status upload to the data recorder."""
-        try:
-            from bms_2030_5_client.web.data_recorder import get_data_recorder
-            
-            recorder = get_data_recorder()
-            status_dict = {}
-            
-            # Extract status fields
-            if hasattr(status, "stateOfChargeStatus") and status.stateOfChargeStatus:
-                soc = status.stateOfChargeStatus
-                if hasattr(soc, "value"):
-                    status_dict["soc"] = soc.value / 100.0  # Convert from 0-10000 to %
-            
-            if hasattr(status, "operationalModeStatus") and status.operationalModeStatus:
-                oms = status.operationalModeStatus
-                if hasattr(oms, "value"):
-                    status_dict["operationalMode"] = oms.value
-            
-            if hasattr(status, "genConnectStatus") and status.genConnectStatus:
-                gc = status.genConnectStatus
-                if hasattr(gc, "value"):
-                    status_dict["genConnectStatus"] = gc.value
-            
-            if hasattr(status, "storConnectStatus") and status.storConnectStatus:
-                sc = status.storConnectStatus
-                if hasattr(sc, "value"):
-                    status_dict["storConnectStatus"] = sc.value
-            
-            if hasattr(status, "alarmStatus") and status.alarmStatus:
-                status_dict["alarmStatus"] = status.alarmStatus
-            
-            if hasattr(status, "readingTime") and status.readingTime:
-                status_dict["readingTime"] = status.readingTime
-            
-            recorder.record_der_status(
-                der_path=der_path,
-                status=status_dict,
-                status_code=200 if success else 500,
-                success=success,
-            )
-        except Exception as e:
-            logger.debug(f"Failed to record DER status: {e}")
 
     async def update_der_availability(
         self,
