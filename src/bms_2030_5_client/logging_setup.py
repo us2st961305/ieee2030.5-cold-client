@@ -4,7 +4,6 @@ Unified logging setup for BMS IEEE 2030.5 Client.
 Configures:
 - structlog for structured JSON logging (production) or colored console (debug)
 - RotatingFileHandler for persistent log files
-- LogBufferHandler for Web UI ring buffer
 - stdlib logging bridge so all libraries route through structlog
 """
 
@@ -18,8 +17,6 @@ from pathlib import Path
 
 import structlog
 
-from bms_2030_5_client.web.log_buffer import LogBufferHandler, log_buffer
-
 
 def setup_logging(
     *,
@@ -28,7 +25,6 @@ def setup_logging(
     max_bytes: int = 10 * 1024 * 1024,  # 10 MB
     backup_count: int = 5,
     debug: bool = False,
-    buffer_size: int = 500,
 ) -> None:
     """
     Configure logging for the entire application.
@@ -39,7 +35,6 @@ def setup_logging(
         max_bytes: Maximum size per log file before rotation.
         backup_count: Number of rotated log files to keep.
         debug: If True, use colored console output instead of JSON.
-        buffer_size: Maximum entries in the Web UI log buffer.
     """
     log_level = getattr(logging, level.upper(), logging.INFO)
 
@@ -63,12 +58,6 @@ def setup_logging(
         )
         file_handler.setLevel(log_level)
         handlers.append(file_handler)
-
-    # 3. Web UI ring buffer
-    log_buffer._max_size = buffer_size
-    buf_handler = LogBufferHandler(log_buffer)
-    buf_handler.setLevel(log_level)
-    handlers.append(buf_handler)
 
     # ── Reset root logger ────────────────────────────────────────────
     root = logging.getLogger()

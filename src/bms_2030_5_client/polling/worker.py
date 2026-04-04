@@ -36,8 +36,6 @@ from bms_2030_5_client.runtime_config import (
     TransformConfig,
     ModbusWriteConfig,
 )
-from bms_2030_5_client.web.log_buffer import log_buffer
-
 logger = logging.getLogger(__name__)
 
 
@@ -501,11 +499,7 @@ class PollingWorker:
         )
         self._thread.start()
         
-        log_buffer.add(
-            "Polling worker started",
-            level="INFO",
-            logger_name="polling.worker",
-        )
+        logger.info("Polling worker started")
         
         return True
     
@@ -536,11 +530,7 @@ class PollingWorker:
         with self._lock:
             self._state = PollingWorkerState.STOPPED
         
-        log_buffer.add(
-            "Polling worker stopped",
-            level="INFO",
-            logger_name="polling.worker",
-        )
+        logger.info("Polling worker stopped")
         
         return True
     
@@ -571,11 +561,7 @@ class PollingWorker:
         if was_running:
             return self.start()
         
-        log_buffer.add(
-            "Polling worker configuration reloaded",
-            level="INFO",
-            logger_name="polling.worker",
-        )
+        logger.info("Polling worker configuration reloaded")
         
         return True
     
@@ -590,11 +576,6 @@ class PollingWorker:
             
         except Exception as e:
             logger.exception(f"Worker error: {e}")
-            log_buffer.add(
-                f"Polling worker error: {e}",
-                level="ERROR",
-                logger_name="polling.worker",
-            )
         finally:
             # Cleanup
             if self._loop:
@@ -641,11 +622,6 @@ class PollingWorker:
                 logger.info(f"SEP client '{profile.name}' connected to {profile.server_base_url}")
             except SepClientError as e:
                 logger.error(f"Failed to connect SEP client '{profile.name}': {e}")
-                log_buffer.add(
-                    f"SEP client '{profile.name}' connection failed: {e.user_message}",
-                    level="ERROR",
-                    logger_name="polling.worker",
-                )
     
     async def _init_modbus_writer(self) -> None:
         """Initialize Modbus writer."""
@@ -696,11 +672,10 @@ class PollingWorker:
                         self._total_errors += 1
                 
                 # Log result
-                log_buffer.add(
-                    result.to_log_message(),
-                    level="INFO" if result.status == PollStatus.SUCCESS else "WARNING",
-                    logger_name="polling.worker",
-                )
+                if result.status == PollStatus.SUCCESS:
+                    logger.info(result.to_log_message())
+                else:
+                    logger.warning(result.to_log_message())
                 
                 # Callback
                 if self._on_poll_result:
@@ -915,11 +890,7 @@ class PollingWorker:
         state = self._target_states[target_id]
         state.target.enabled = enabled
         
-        log_buffer.add(
-            f"Poll target '{target_id}' {'enabled' if enabled else 'disabled'}",
-            level="INFO",
-            logger_name="polling.worker",
-        )
+        logger.info(f"Poll target '{target_id}' {'enabled' if enabled else 'disabled'}")
         
         return True
 
