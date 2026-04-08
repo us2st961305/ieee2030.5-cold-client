@@ -747,13 +747,34 @@ class LoggingConfig:
         )
 
 
+@dataclass
+class TimeSyncConfig:
+    """Configuration for Time Synchronization."""
+    enabled: bool = True
+    interval_seconds: int = 900  # 15 minutes default
+
+    def __post_init__(self):
+        self.enabled = _validate_type(self.enabled, bool, "time_sync.enabled")
+        self.interval_seconds = _validate_range(
+            self.interval_seconds, "time_sync.interval_seconds", ge=60, le=86400
+        )
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TimeSyncConfig":
+        """Create from dictionary."""
+        return cls(
+            enabled=data.get("enabled", cls.enabled),
+            interval_seconds=data.get("interval_seconds", cls.interval_seconds),
+        )
+
+
 # ============================================
 # Main Runtime Configuration
 # ============================================
 
 _KNOWN_TOP_LEVEL_KEYS = {
     "profiles", "modbus", "poll_targets", "subscriptions",
-    "notification_server", "power_control", "logging",
+    "notification_server", "power_control", "logging", "time_sync",
 }
 
 
@@ -772,6 +793,7 @@ class RuntimeConfig:
     notification_server: NotificationServerConfig = field(default_factory=NotificationServerConfig)
     power_control: PowerControlConfig = field(default_factory=PowerControlConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    time_sync: TimeSyncConfig = field(default_factory=TimeSyncConfig)
 
     def get_profile(self, name: str) -> Optional[ProfileConfig]:
         """Get a profile by name."""
@@ -851,6 +873,7 @@ class RuntimeConfig:
             ),
             power_control=PowerControlConfig.from_dict(data.get("power_control", {})),
             logging=LoggingConfig.from_dict(data.get("logging", {})),
+            time_sync=TimeSyncConfig.from_dict(data.get("time_sync", {})),
         )
         instance.config_warnings = warnings
         return instance

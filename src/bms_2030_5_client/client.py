@@ -69,6 +69,7 @@ from bms_2030_5_client.cycle_storage import (
     CycleTrackingData,
 )
 from bms_2030_5_client.task_supervisor import TaskSupervisor
+from bms_2030_5_client.time_sync.client import TimeSyncClient
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,15 @@ class BMSClient:
         )
         self.ieee2030_5_client = IEEE2030_5Client.from_config(config)
         self.adapter = BMSAdapter()
-        
+
+        # Time Sync Client
+        self.time_sync_client: Optional[TimeSyncClient] = None
+        if hasattr(config, 'runtime') and config.runtime.time_sync.enabled:
+            self.time_sync_client = TimeSyncClient(
+                client=self.ieee2030_5_client, 
+                config=config.runtime.time_sync
+            )
+
         # State
         self._running = False
         self._edev_href: Optional[str] = None  # EndDevice href (e.g., /edev/97)
