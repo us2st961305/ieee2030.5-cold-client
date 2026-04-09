@@ -1482,3 +1482,17 @@ class DERControlResponseFull:
     def hex_to_modes(hex_str: str) -> int:
         """Convert HexBinary32 string to modes bitmap."""
         return int(hex_str, 16)
+
+
+@dataclass_json
+@dataclass
+class Time:
+    """IEEE 2030.5 Time resource."""
+    href: Optional[str] = None
+    currentTime: int = 0  # Unix timestamp
+    dstEndTime: int = 0
+    dstOffset: int = 0
+    dstStartTime: int = 0
+    localTime: int = 0
+    quality: int = 0
+    tzOffset: int = 0
