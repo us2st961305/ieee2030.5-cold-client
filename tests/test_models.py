@@ -6,6 +6,8 @@ import pytest
 from datetime import datetime
 
 from bms_2030_5_client.models import RackData, SystemData, BMSSnapshot, RackStatus
+from bms_2030_5_client.models.ieee2030_5_models import Time
+from bms_2030_5_client.ieee2030_5.xml_utils import dataclass_to_xml, xml_to_dataclass
 
 
 class TestRackData:
@@ -73,3 +75,39 @@ class TestBMSSnapshot:
     def test_has_alarms(self, sample_snapshot):
         """Test alarm detection."""
         assert sample_snapshot.has_alarms is False
+
+
+class TestIEEE2030_5Models:
+    """Tests for IEEE 2030.5 data models."""
+
+    def test_time_serialization_deserialization(self):
+        """Test Time dataclass XML serialization and deserialization."""
+        # Sample XML response from IEEE 2030.5 server
+        time_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<Time xmlns="urn:ieee:std:2030.5:ns">
+    <currentTime>1640995200</currentTime>
+    <dstOffset>0</dstOffset>
+    <tzOffset>-28800</tzOffset>
+    <quality>7</quality>
+</Time>"""
+        
+        # Test XML to dataclass deserialization
+        time_obj = xml_to_dataclass(time_xml, Time)
+        assert time_obj.current_time == 1640995200
+        assert time_obj.dst_offset == 0
+        assert time_obj.tz_offset == -28800
+        assert time_obj.quality == 7
+        
+        # Test dataclass to XML serialization
+        serialized_xml = dataclass_to_xml(time_obj)
+        assert "<currentTime>1640995200</currentTime>" in serialized_xml
+        assert "<dstOffset>0</dstOffset>" in serialized_xml
+        assert "<tzOffset>-28800</tzOffset>" in serialized_xml
+        assert "<quality>7</quality>" in serialized_xml
+        
+        # Test round-trip consistency
+        round_trip_obj = xml_to_dataclass(serialized_xml, Time)
+        assert round_trip_obj.current_time == time_obj.current_time
+        assert round_trip_obj.dst_offset == time_obj.dst_offset
+        assert round_trip_obj.tz_offset == time_obj.tz_offset
+        assert round_trip_obj.quality == time_obj.quality
