@@ -1,1 +1,0 @@
-# Time synchronization tests package

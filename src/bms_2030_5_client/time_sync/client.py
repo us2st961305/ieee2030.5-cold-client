@@ -55,7 +55,7 @@ class TimeSyncClient:
         self._running = True
         while self._running:
             try:
-                await self.sync_time()
+                await self._sync_time()
             except Exception:
                 logger.exception("An unexpected error occurred during time synchronization")
             
@@ -65,7 +65,7 @@ class TimeSyncClient:
         """Stops the synchronization loop."""
         self._running = False
 
-    async def sync_time(self):
+    async def _sync_time(self):
         """
         Performs a single time synchronization with the server.
         """
