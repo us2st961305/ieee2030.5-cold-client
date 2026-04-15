@@ -346,23 +346,6 @@ class GPSLocationType:
 
 @dataclass_json
 @dataclass
-class Time:
-    """
-    Time resource model.
-    
-    Contains time synchronization information from the server.
-    """
-    href: Optional[str] = None
-    currentTime: int = 0  # Unix timestamp
-    dstEndTime: int = 0
-    dstOffset: int = 0
-    dstStartTime: int = 0
-    quality: int = 0  # 0=Not sync, 1-3=NTP stratum, 4=manual
-    tzOffset: int = 0
-
-
-@dataclass_json
-@dataclass
 class DeviceInformation:
     """
     IEEE 2030.5 Device Information.
@@ -1501,3 +1484,15 @@ class DERControlResponseFull:
         return int(hex_str, 16)
 
 
+@dataclass_json
+@dataclass
+class Time:
+    """IEEE 2030.5 Time resource."""
+    href: Optional[str] = None
+    currentTime: int = 0  # Unix timestamp
+    dstEndTime: int = 0
+    dstOffset: int = 0
+    dstStartTime: int = 0
+    localTime: int = 0
+    quality: int = 0
+    tzOffset: int = 0
