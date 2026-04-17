@@ -1,85 +1,92 @@
 """
-Time Sync Client for IEEE 2030.5 Server Time Synchronization.
+IEEE 2030.5 Time Synchronization Client.
 
-This module provides the TimeSyncClient class for synchronizing time with
-an IEEE 2030.5 server by fetching the Time resource from the /tm endpoint.
+Implements periodic time synchronization with the IEEE 2030.5 server
+as required by IEEE 2030.5-2018 Section 5.10: Time Function Set.
+
+The Time resource (/tm) does not support subscription/notification,
+so polling is the only method for time synchronization.
 """
 
-from __future__ import annotations
-
+import asyncio
 import logging
 import time
-from typing import Optional
 
-from bms_2030_5_client.core.sep_client import SepClientError
-from bms_2030_5_client.ieee2030_5.client import IEEE2030_5Client
+from bms_2030_5_client.core.sep_client import SepClient, SepClientError
 from bms_2030_5_client.ieee2030_5.xml_utils import xml_to_dataclass
 from bms_2030_5_client.models.ieee2030_5_models import Time
+from bms_2030_5_client.runtime_config import TimeSyncConfig
 
 logger = logging.getLogger(__name__)
 
 
 class TimeSyncClient:
     """
-    Client for synchronizing time with an IEEE 2030.5 server.
+    Periodically synchronizes client time with the IEEE 2030.5 server.
     
-    This client fetches the Time resource from the server's /tm endpoint
-    and provides methods to synchronize and log time differences.
+    According to IEEE 2030.5-2018 Section 5.10, clients must periodically
+    poll the server's Time resource (/tm) to maintain clock accuracy.
+    The recommended polling interval is 15 minutes.
     """
 
-    def __init__(self, client: IEEE2030_5Client):
+    def __init__(self, client: SepClient, config: TimeSyncConfig):
         """
         Initialize the TimeSyncClient.
 
         Args:
-            client: An instance of IEEE2030_5Client to handle HTTP requests.
+            client: The SepClient instance for server communication.
+            config: Time synchronization configuration.
         """
         self._client = client
-        self._time_resource_path = "/tm"
+        self._config = config
+        self._running = False
 
-    async def get_server_time(self) -> Optional[Time]:
+    async def run(self):
         """
-        Fetch the Time resource from the server.
-
-        Returns:
-            A Time object if successful, otherwise None.
+        The main loop for the time synchronization task.
         """
-        try:
-            logger.debug(f"Requesting server time from {self._time_resource_path}")
-            response = await self._client.get(self._time_resource_path)
+        if not self._config.enabled:
+            logger.info("Time synchronization is disabled by configuration.")
+            return
 
-            if not response.is_success:
-                logger.error(
-                    f"Failed to get server time. Status: {response.status_code}, "
-                    f"Body: {response.body}"
-                )
-                return None
+        logger.info(
+            f"Starting time synchronization task with a {self._config.interval_seconds}s interval."
+        )
+        self._running = True
+        while self._running:
+            try:
+                await self.sync_and_log_time()
+            except Exception:
+                logger.exception("An unexpected error occurred during time synchronization")
+            
+            await asyncio.sleep(self._config.interval_seconds)
 
-            time_obj = xml_to_dataclass(response.body, Time)
-            return time_obj
-
-        except SepClientError as e:
-            logger.error(f"Error getting server time: {e}", exc_info=True)
-            return None
-        except Exception:
-            logger.exception("An unexpected error occurred during time synchronization.")
-            return None
+    def stop(self):
+        """Stops the synchronization loop."""
+        self._running = False
 
     async def sync_and_log_time(self) -> None:
         """
-        Fetch server time, calculate the offset, and log the result.
-        This method handles graceful degradation if the sync fails.
+        Performs a single time synchronization with the server and logs the result.
         """
-        server_time = await self.get_server_time()
-        if server_time and server_time.currentTime > 0:
+        try:
+            logger.debug("Requesting server time from /tm")
+            response = await self._client.get("/tm")
+            response.raise_for_status()
+
+            time_obj = xml_to_dataclass(response.text, Time)
+            server_time = time_obj.currentTime
             local_time = int(time.time())
-            delta = server_time.currentTime - local_time
+            offset = server_time - local_time
+
+            if server_time <= 0:
+                logger.warning("Could not synchronize time with server. Falling back to local system time.")
+                return
+
             logger.info(
-                f"Time synchronized with server. Server Time: {server_time.currentTime}, "
-                f"Local Time: {local_time}, Delta: {delta}s"
+                f"Time synchronized with server. Server Time: {server_time}, "
+                f"Local Time: {local_time}, Delta: {offset}s"
             )
-        else:
-            logger.warning(
-                "Could not synchronize time with server. "
-                "Falling back to local system time."
-            )
+
+        except (SepClientError, Exception) as e:
+            logger.warning(f"Could not synchronize time with server. Falling back to local system time. Error: {e}")
