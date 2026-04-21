@@ -138,7 +138,10 @@ class BMSClient:
         )
         self.ieee2030_5_client = IEEE2030_5Client.from_config(config)
         self.adapter = BMSAdapter()
-        self.time_sync_client = TimeSyncClient(client=self.ieee2030_5_client)
+        
+        # Time sync config is nested in config.subscription in Config class
+        time_sync_config = config.subscription
+        self.time_sync_client = TimeSyncClient(client=self.ieee2030_5_client, config=time_sync_config)
 
         # State
         self._running = False

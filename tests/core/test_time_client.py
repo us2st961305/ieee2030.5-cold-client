@@ -48,24 +48,11 @@ async def test_get_server_time_success(time_sync_client, mock_ieee2030_5_client)
     </Time>"""
     mock_ieee2030_5_client.get.return_value = mock_response
     
-    # Mock xml_to_dataclass to return a Time object
-    expected_time = Time(
-        href="/tm",
-        currentTime=1704585600,
-        dstEndTime=0,
-        dstOffset=0,
-        dstStartTime=0,
-        localTime=1704585600,
-        quality=0,
-        tzOffset=0,
-    )
+    expected_time = 1704585600
     
-    with patch('bms_2030_5_client.core.time_client.xml_to_dataclass', return_value=expected_time):
-        # The test expects get_server_time, but the implementation only has sync_and_log_time.
-        # For now, we will just mock it or verify it indirectly.
-        # Since the task is to align API, and I changed implementation to sync_and_log_time,
-        # I should probably add get_server_time back to the implementation for the tests to pass.
-        pass
+    with patch('bms_2030_5_client.core.time_client.xml_to_dataclass', return_value=Time(currentTime=expected_time)):
+        result = await time_sync_client.get_server_time()
+        assert result == expected_time
 
 @pytest.mark.asyncio
 async def test_sync_and_log_time_success(time_sync_client, caplog):
@@ -78,16 +65,16 @@ async def test_sync_and_log_time_success(time_sync_client, caplog):
         <currentTime>1704585600</currentTime>
     </Time>"""
     
-    server_time_obj = Time(currentTime=1704585600)
+    server_time_val = 1704585600
     
     with patch.object(time_sync_client._client, 'get', return_value=mock_response):
-        with patch('bms_2030_5_client.core.time_client.xml_to_dataclass', return_value=server_time_obj):
+        with patch('bms_2030_5_client.core.time_client.xml_to_dataclass', return_value=Time(currentTime=server_time_val)):
             with patch('time.time', return_value=1704585590):  # 10 seconds behind
                 await time_sync_client.sync_and_log_time()
     
     # Check that success message was logged
     assert "Time synchronized with server" in caplog.text
-    assert "Server Time: 1704585600" in caplog.text
+    assert f"Server Time: {server_time_val}" in caplog.text
     assert "Local Time: 1704585590" in caplog.text
     assert "Delta: 10s" in caplog.text
 
@@ -144,15 +131,16 @@ async def test_sync_and_log_time_large_delta(time_sync_client, caplog):
     # Mock server time that's significantly ahead
     mock_response = Mock()
     mock_response.is_success = True
-    server_time_obj = Time(currentTime=1704585600)
+    server_time_val = 1704585600
     
     with patch.object(time_sync_client._client, 'get', return_value=mock_response):
-        with patch('bms_2030_5_client.core.time_client.xml_to_dataclass', return_value=server_time_obj):
+        with patch('bms_2030_5_client.core.time_client.xml_to_dataclass', return_value=Time(currentTime=server_time_val)):
             with patch('time.time', return_value=1704582000):  # 1 hour behind
                 await time_sync_client.sync_and_log_time()
     
     # Check that large delta is logged correctly
     assert "Time synchronized with server" in caplog.text
+    assert f"Server Time: {server_time_val}" in caplog.text
     assert "Delta: 3600s" in caplog.text
 
 
@@ -162,13 +150,14 @@ async def test_sync_and_log_time_negative_delta(time_sync_client, caplog):
     # Mock server time that's behind local time
     mock_response = Mock()
     mock_response.is_success = True
-    server_time_obj = Time(currentTime=1704585600)
+    server_time_val = 1704585600
     
     with patch.object(time_sync_client._client, 'get', return_value=mock_response):
-        with patch('bms_2030_5_client.core.time_client.xml_to_dataclass', return_value=server_time_obj):
+        with patch('bms_2030_5_client.core.time_client.xml_to_dataclass', return_value=Time(currentTime=server_time_val)):
             with patch('time.time', return_value=1704585700):  # 100 seconds ahead
                 await time_sync_client.sync_and_log_time()
     
     # Check that negative delta is logged correctly
     assert "Time synchronized with server" in caplog.text
+    assert f"Server Time: {server_time_val}" in caplog.text
     assert "Delta: -100s" in caplog.text

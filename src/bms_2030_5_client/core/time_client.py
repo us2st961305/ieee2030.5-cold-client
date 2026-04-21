@@ -11,6 +11,7 @@ so polling is the only method for time synchronization.
 import asyncio
 import logging
 import time
+from typing import Optional
 
 from bms_2030_5_client.core.sep_client import SepClient, SepClientError
 from bms_2030_5_client.ieee2030_5.xml_utils import xml_to_dataclass
@@ -70,18 +71,13 @@ class TimeSyncClient:
         Performs a single time synchronization with the server and logs the result.
         """
         try:
-            logger.debug("Requesting server time from /tm")
-            response = await self._client.get("/tm")
-            response.raise_for_status()
-
-            time_obj = xml_to_dataclass(response.text, Time)
-            server_time = time_obj.currentTime
-            local_time = int(time.time())
-            offset = server_time - local_time
-
-            if server_time <= 0:
+            server_time = await self.get_server_time()
+            if server_time is None:
                 logger.warning("Could not synchronize time with server. Falling back to local system time.")
                 return
+
+            local_time = int(time.time())
+            offset = server_time - local_time
 
             logger.info(
                 f"Time synchronized with server. Server Time: {server_time}, "
@@ -90,3 +86,24 @@ class TimeSyncClient:
 
         except (SepClientError, Exception) as e:
             logger.warning(f"Could not synchronize time with server. Falling back to local system time. Error: {e}")
+
+    async def get_server_time(self) -> Optional[int]:
+        """
+        Retrieves the current server time from the /tm resource.
+        Returns the timestamp as an integer, or None if retrieval fails.
+        """
+        try:
+            logger.debug("Requesting server time from /tm")
+            response = await self._client.get("/tm")
+            response.raise_for_status()
+
+            time_obj = xml_to_dataclass(response.text, Time)
+            server_time = time_obj.currentTime
+
+            if server_time <= 0:
+                return None
+            
+            return server_time
+        except (SepClientError, Exception) as e:
+            logger.debug(f"Failed to retrieve server time: {e}")
+            return None

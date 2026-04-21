@@ -256,6 +256,10 @@ class SepClient:
         if not self.verify_server:
             return False
         
+        # If we are using HTTP (not HTTPS), we should also skip verification and certificates
+        if self.base_url.startswith("http://"):
+            return False
+        
         try:
             ctx = ssl.create_default_context(
                 cafile=str(self.tls.ca_bundle_path)
@@ -294,13 +298,15 @@ class SepClient:
         
         # Create HTTP client with mTLS
         try:
+            # If using HTTP, skip certs
+            cert = None if self.base_url.startswith("http://") else (
+                str(self.tls.client_cert_path),
+                str(self.tls.client_key_path),
+            )
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
                 verify=ssl_context,
-                cert=(
-                    str(self.tls.client_cert_path),
-                    str(self.tls.client_key_path),
-                ),
+                cert=cert,
                 timeout=self.timeout,
                 headers=self._get_default_headers(),
             )

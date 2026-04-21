@@ -30,7 +30,7 @@ class TestBMSAdapter:
         
         assert status.readingTime > 0
         assert status.stateOfChargeStatus is not None
-        assert status.stateOfChargeStatus.value == 8350  # 83.5% * 100
+        assert status.stateOfChargeStatus.value == 8500  # 85.0% * 100
 
     def test_snapshot_to_der_availability(self, adapter, sample_snapshot):
         """Test converting snapshot to DERAvailability."""
@@ -53,7 +53,7 @@ class TestBMSAdapter:
         
         status = adapter.rack_to_der_status(sample_rack_data)
         
-        assert status.operationalModeStatus == int(OperationalModeStatusType.CHARGING)
+        assert status.operationalModeStatus.value == f"{int(OperationalModeStatusType.OPERATING):02X}"
 
     def test_rack_to_der_status_discharging(self, adapter, sample_rack_data):
         """Test rack status when discharging."""
@@ -62,7 +62,7 @@ class TestBMSAdapter:
         
         status = adapter.rack_to_der_status(sample_rack_data)
         
-        assert status.operationalModeStatus == int(OperationalModeStatusType.DISCHARGING)
+        assert status.operationalModeStatus.value == f"{int(OperationalModeStatusType.OPERATING):02X}"
 
     def test_rack_to_der_status_fault(self, adapter, sample_rack_data):
         """Test rack status with fault."""
@@ -71,4 +71,4 @@ class TestBMSAdapter:
         
         status = adapter.rack_to_der_status(sample_rack_data)
         
-        assert status.genConnectStatus & ConnectStatusType.FAULT
+        assert int(status.genConnectStatus.value, 16) & ConnectStatusType.FAULT

@@ -132,8 +132,8 @@ async def test_bms_client_time_sync_success_logging(
         )
         
         # Mock successful time sync
-        server_time = Time(currentTime=1704585600)
-        with patch.object(client.time_sync_client, 'get_server_time', return_value=server_time), \
+        server_time_val = 1704585600
+        with patch.object(client.time_sync_client, 'get_server_time', return_value=server_time_val), \
              patch('time.time', return_value=1704585590):
             
             try:
@@ -220,7 +220,6 @@ async def test_bms_client_time_sync_client_initialization():
         # Verify TimeSyncClient was initialized
         assert client.time_sync_client is not None
         assert client.time_sync_client._client is mock_ieee2030_5_client
-        assert client.time_sync_client._time_resource_path == "/tm"
 
 
 @pytest.mark.asyncio
