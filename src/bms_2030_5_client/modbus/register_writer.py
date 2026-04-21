@@ -257,7 +257,7 @@ class ModbusRegisterWriter:
             )
             return WriteResult(
                 success=True,
-                address=address,
+                address=address-1,
                 value=value,
                 raw_values=raw_values,
                 latency_ms=latency,
@@ -270,7 +270,7 @@ class ModbusRegisterWriter:
         if not self._connected or self._client is None:
             return WriteResult(
                 success=False,
-                address=address,
+                address=address-1,
                 value=value,
                 raw_values=raw_values,
                 error="Not connected to Modbus server",
@@ -281,14 +281,14 @@ class ModbusRegisterWriter:
                 if len(raw_values) == 1:
                     # Single register write
                     result = await self._client.write_register(
-                        address=address,
+                        address=address-1,
                         value=raw_values[0],
                         device_id=self.unit_id,
                     )
                 else:
                     # Multiple register write
                     result = await self._client.write_registers(
-                        address=address,
+                        address=address-1,
                         values=raw_values,
                         device_id=self.unit_id,
                     )
@@ -298,7 +298,7 @@ class ModbusRegisterWriter:
                 if result.isError():
                     return WriteResult(
                         success=False,
-                        address=address,
+                        address=address-1,
                         value=value,
                         raw_values=raw_values,
                         error=str(result),
@@ -312,7 +312,7 @@ class ModbusRegisterWriter:
                 
                 return WriteResult(
                     success=True,
-                    address=address,
+                    address=address-1,
                     value=value,
                     raw_values=raw_values,
                     latency_ms=latency,
@@ -323,7 +323,7 @@ class ModbusRegisterWriter:
             logger.error(f"Modbus write error at {address}: {e}")
             return WriteResult(
                 success=False,
-                address=address,
+                address=address-1,
                 value=value,
                 raw_values=raw_values,
                 error=str(e),
@@ -334,7 +334,7 @@ class ModbusRegisterWriter:
             logger.error(f"Unexpected error writing to {address}: {e}")
             return WriteResult(
                 success=False,
-                address=address,
+                address=address-1,
                 value=value,
                 raw_values=raw_values,
                 error=str(e),
