@@ -5,6 +5,7 @@ Tests the integration of TimeSyncClient with BMSClient startup process.
 """
 
 import pytest
+import logging
 from unittest.mock import AsyncMock, Mock, patch
 import asyncio
 
@@ -135,13 +136,14 @@ async def test_bms_client_time_sync_success_logging(
         server_time_val = 1704585600
         with patch.object(client.time_sync_client, 'get_server_time', return_value=server_time_val), \
              patch('time.time', return_value=1704585590):
-            
+
             try:
-                await client.start()
-                
+                with caplog.at_level(logging.INFO, logger="bms_2030_5_client.core.time_client"):
+                    await client.start()
+
                 # Check that time sync success message appears in logs
                 assert "Time synchronized with server" in caplog.text
-                
+
             finally:
                 await client.stop()
 

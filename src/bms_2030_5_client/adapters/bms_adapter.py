@@ -61,23 +61,27 @@ class BMSAdapter:
         nominal_voltage: float = 750.0,  # V
         max_power: float = 100000.0,  # W (100 kW)
         max_current: float = 150.0,  # A
+        time_sync_client=None,
     ):
         """
         Initialize adapter with system ratings.
-        
+
         Args:
             nominal_voltage: Nominal system voltage in V
             max_power: Maximum power rating in W
             max_current: Maximum current rating in A
+            time_sync_client: Optional TimeSyncClient. When provided, all meter
+                reading timestamps are corrected by the server time offset via
+                get_corrected_time(). This is the fix for timestamp imprecision.
         """
         self.nominal_voltage = nominal_voltage
         self.max_power = max_power
         self.max_current = max_current
-        
+
         # Initialize specialized adapters
         self._ders_adapter = DERStatusAdapter()
         self._dera_adapter = DERAvailabilityAdapter(max_power=max_power)
-        self._mup_adapter = MirrorUsagePointAdapter()
+        self._mup_adapter = MirrorUsagePointAdapter(time_sync_client=time_sync_client)
 
     def _to_active_power(self, watts: float) -> ActivePower:
         """Convert watts to ActivePower with appropriate multiplier."""

@@ -38,15 +38,36 @@ class MirrorUsagePointAdapter:
     # IANA PEN suffix (8 hex chars) appended to every mRID
     _IANA_PEN_HEX = f"{DEFAULT_IANA_PEN:08X}"
 
-    def __init__(self, device_lfdi: str = ""):
+    def __init__(self, device_lfdi: str = "", time_sync_client=None):
         """Initialize adapter.
-        
+
         Args:
-            device_lfdi: Device LFDI for generating unique but stable mRIDs
+            device_lfdi: Device LFDI for generating unique but stable mRIDs.
+            time_sync_client: Optional TimeSyncClient instance. When provided,
+                get_corrected_time() is used instead of int(time.time()) for all
+                meter reading timestamps, ensuring server-aligned timestamps.
+                This is the fix for repeated "timestamp imprecision" regressions.
         """
         self._device_lfdi = device_lfdi
+        self._time_sync_client = time_sync_client
         # In-memory cache: reading_key -> mRID (stable within one run)
         self._cached_mrids: Dict[str, str] = {}
+
+    def _get_current_timestamp(self) -> int:
+        """
+        Return the current timestamp, corrected by server time offset if available.
+
+        When a TimeSyncClient is attached and has been synced, returns
+        get_corrected_time() which applies the server-local offset.
+        Otherwise falls back to int(time.time()).
+
+        This is the single source of truth for all meter reading timestamps.
+        """
+        import time as _time
+        if (self._time_sync_client is not None
+                and self._time_sync_client.is_synced):
+            return self._time_sync_client.get_corrected_time()
+        return int(_time.time())
 
     def _generate_mrid(self) -> str:
         """
@@ -379,7 +400,12 @@ class MirrorUsagePointAdapter:
         Returns:
             List of MirrorMeterReading objects ready for upload
         """
-        ts = int(snapshot.timestamp.timestamp())
+        # Use server-corrected timestamp when TimeSyncClient is available and synced.
+        # Fall back to snapshot.timestamp for backward compatibility.
+        if self._time_sync_client is not None and self._time_sync_client.is_synced:
+            ts = self._get_current_timestamp()
+        else:
+            ts = int(snapshot.timestamp.timestamp())
         readings = []
         
         # Current Reading (0.1A units from CUBE)

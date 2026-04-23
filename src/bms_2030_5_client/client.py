@@ -137,11 +137,15 @@ class BMSClient:
             refresh_interval=config.modbus.refresh_interval,
         )
         self.ieee2030_5_client = IEEE2030_5Client.from_config(config)
-        self.adapter = BMSAdapter()
-        
-        # Time sync config is nested in config.subscription in Config class
+
+        # Time sync config is nested in config.subscription in Config class.
+        # Must be created BEFORE BMSAdapter so the adapter receives a reference.
         time_sync_config = config.subscription
         self.time_sync_client = TimeSyncClient(client=self.ieee2030_5_client, config=time_sync_config)
+
+        # Pass time_sync_client to adapter so meter reading timestamps are
+        # corrected by server offset after each sync.
+        self.adapter = BMSAdapter(time_sync_client=self.time_sync_client)
 
         # State
         self._running = False
