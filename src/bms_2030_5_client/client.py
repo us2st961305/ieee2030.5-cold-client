@@ -1513,10 +1513,11 @@ class BMSClient:
                     self._reading_mrids.clear()
                     # _mup_mrid is intentionally preserved
             except Exception as e:
-                logger.info(f"[Fast Recovery] Could not verify cached MirrorUsagePoint: {e}, re-registering...")
-                self._mup_href = None
-                self._reading_mrids.clear()
-                # _mup_mrid is intentionally preserved
+                logger.warning(
+                    f"[Fast Recovery] Could not verify cached MirrorUsagePoint: {e}; "
+                    "keeping last-known-good MUP href and retrying later"
+                )
+                return
 
         # Try server recovery when no cached MUP (DB empty or deleted)
         if not self._mup_href:
@@ -1646,6 +1647,54 @@ class BMSClient:
             logger.warning(f"Failed to register MirrorUsagePoint: {e}")
             self._mup_href = None
 
+    async def _recover_missing_mup_href(self) -> bool:
+        """Recover a lost runtime MirrorUsagePoint href before skipping uploads.
+
+        A transient reconnect/re-registration path can clear ``self._mup_href`` while
+        the last-known-good MUP still exists in SQLite and/or on the server.  Without
+        this guard the metering loop logs ``No MirrorUsagePoint href`` forever until a
+        container restart reloads cached resources.  Prefer local cache, then server
+        recovery, and only then fall back to registration.
+        """
+        if self._mup_href:
+            return True
+
+        logger.warning(
+            "No MirrorUsagePoint href available - attempting MUP recovery before skip"
+        )
+
+        try:
+            if self._load_cached_resources() and self._mup_href:
+                logger.info(
+                    f"[MUP Recovery] Restored MirrorUsagePoint from local cache: {self._mup_href}"
+                )
+                return True
+        except Exception as e:
+            logger.warning(f"[MUP Recovery] Local cache recovery failed: {e}")
+
+        try:
+            recovered = await self._recover_from_server()
+            if recovered and self._mup_href:
+                logger.info(
+                    f"[MUP Recovery] Restored MirrorUsagePoint from server: {self._mup_href}"
+                )
+                return True
+        except Exception as e:
+            logger.warning(f"[MUP Recovery] Server recovery failed: {e}")
+
+        try:
+            await self._register_meter()
+            if self._mup_href:
+                logger.info(
+                    f"[MUP Recovery] Re-registered MirrorUsagePoint: {self._mup_href}"
+                )
+                return True
+        except Exception as e:
+            logger.warning(f"[MUP Recovery] Re-registration failed: {e}")
+
+        logger.warning("No MirrorUsagePoint href available after recovery - skipping meter upload")
+        return False
+
     async def _metering_loop(self) -> None:
         """
         Metering data upload loop.
@@ -1696,8 +1745,9 @@ class BMSClient:
             return
 
         if not self._mup_href:
-            logger.warning("No MirrorUsagePoint href available - skipping meter upload")
-            return
+            recovered_href = await self._recover_missing_mup_href()
+            if not recovered_href:
+                return
 
         # Calculate SOH from active racks and update cycle tracking
         soh = None
